@@ -1,0 +1,11 @@
+streamlit
+langchain
+langchain-nvidia-ai-endpoints
+langchain-google-genai
+langchain-community
+faiss-cpu
+python-dotenv
+pypdf
+Pillow
+nest_asyncio
+langchain-openai
