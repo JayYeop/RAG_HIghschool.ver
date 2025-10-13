@@ -8,4 +8,17 @@ python-dotenv
 pypdf
 Pillow
 nest_asyncio
-langchain-openai
+
+
+# --- 시연을 위해 추가된 패키지 ---
+# OCR 기능(Gemini 사용으로 불필요)
+pytesseract
+opencv-python
+
+# 다양한 문서 처리
+unstructured
+python-docx
+python-pptx
+
+# UI/UX 향상 (선택 사항)
+streamlit-lottie

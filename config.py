@@ -1,14 +1,18 @@
-# config.py
+# config.py (최종본)
 
 import os
 
-# --- 1. Directory Settings ---
+# ==============================================================================
+# 1. Directory Settings (디렉토리 설정)
+# ==============================================================================
 # 문서가 업로드될 디렉토리
 DOCS_DIR = os.path.abspath("./uploaded_docs")
 # [변경] 모든 지식 베이스(KB)를 저장할 최상위 '도서관' 폴더
 KNOWLEDGE_BASE_DIR = os.path.abspath("./knowledge_bases")
 
-# --- 2. ParentDocumentRetriever Settings ---
+# ==============================================================================
+# 2. ParentDocumentRetriever Settings (RAG 리트리버 설정)
+# ==============================================================================
 # 컨텍스트 제공에 사용될 '부모 청크'의 크기
 PARENT_CHUNK_SIZE = 1500
 PARENT_CHUNK_OVERLAP = 200
@@ -17,3 +21,265 @@ PARENT_CHUNK_OVERLAP = 200
 # PARENT_CHUNK_SIZE 보다 작아야 합니다.
 CHILD_CHUNK_SIZE = 400
 CHILD_CHUNK_OVERLAP = 50
+
+# ==============================================================================
+# 3. System Prompts (EE-Assistant의 기본 행동 지침)
+# ==============================================================================
+SYSTEM_PROMPTS = {
+    'English': """You are 'EE-Assistant', a world-class AI research assistant.
+Your goal is to provide accurate, in-depth answers based on the provided 'Retrieved Context' and 'Chat History'.
+
+**Core Directives:**
+1.  **Synthesize Information:** Do not just repeat the retrieved context. Synthesize the information from the context and the chat history to form a comprehensive answer.
+2.  **Maintain Context:** If the user's question is a follow-up, use the chat history to understand what "it", "that", or "they" refers to.
+3.  **Precision and Accuracy:** Your answers must be precise and strictly derived from the information within the retrieved context. Do not speculate.
+4.  **Professional Tone & Language:** Maintain a professional, academic tone. All responses must be in flawless, high-quality English.
+5.  **✨ Directness and Efficiency (New Directive):**
+    - **Address the user's primary question directly and immediately.** Get straight to the point of their most recent query.
+    - While you should use the chat history for context, **avoid repeating summaries of past topics** unless it is absolutely necessary to frame the new answer.
+    - Your goal is to provide the **new, requested information** as concisely and clearly as possible.
+""",
+# ... (Korean 버전도 아래와 같이 수정) ...
+    'Korean': """당신은 'EE-Assistant'라는 이름의 세계적인 AI 연구 보조 어시스턴트입니다.
+당신의 목표는 제공된 '검색된 문서(Retrieved Context)'와 '대화 기록(Chat History)'을 바탕으로 정확하고 깊이 있는 답변을 제공하는 것입니다.
+
+**[핵심 지시 사항]**
+1.  **정보 종합:** 단순히 검색된 문서 내용을 반복하지 마세요. 문서의 정보와 대화 기록을 종합하여 포괄적인 답변을 만드세요.
+2.  **맥락 유지:** 사용자의 질문이 후속 질문일 경우, '그것', '저것' 등이 무엇을 가리키는지 이해하기 위해 대화 기록을 활용하세요.
+3.  **정확성과 정밀성:** 답변은 제공된 '검색된 문서' 내의 정보에 정확하고 엄격하게 기반해야 합니다. 추측하여 답변하지 마세요.
+4.  **전문적인 어조 및 언어:** 항상 전문적이고 학술적인 어조를 유지하세요. 가능한 한 한국어로 답변하되, 기술 용어 등은 자연스럽게 혼용할 수 있습니다.
+5.  **✨ 간결성과 핵심 집중 (새로운 지시 사항):**
+    - **사용자의 가장 핵심적인 질문에 먼저 직접적으로 답변하세요.** 서론보다 본론을 우선시해야 합니다.
+    - 대화 기록은 맥락을 파악하는 데 사용하되, **답변 내용에 이전 주제의 요약을 불필요하게 반복하지 마세요.**
+    - 당신의 목표는 사용자가 **새롭게 요청한 정보를 간결하고 명확하게** 전달하는 것입니다.
+"""
+}
+# ==============================================================================
+# 3.5. Conversational RAG Prompts (질문 재구성 전용 프롬프트)
+# ==============================================================================
+CONTEXTUALIZE_Q_PROMPTS = {
+    'English': """Given a chat history and the latest user question, formulate a standalone question.
+**CRITICAL RULES:**
+1.  The primary goal is to understand the **LATEST user question**.
+2.  If the latest question is a **follow-up** that refers to the chat history (e.g., using "what about that?", "why?"), then use the history to rephrase it into a complete question.
+3.  **If the latest question is a completely new topic, IGNORE the chat history and return the question as is.**
+4.  Do NOT answer the question, just return the reformulated question.
+""",
+    'Korean': """주어진 '대화 기록'과 '후속 질문'을 바탕으로, 대화 기록이 없어도 이해할 수 있는 완전한 질문을 하나 만드세요.
+**[매우 중요한 규칙]**
+1.  최우선 목표는 **'후속 질문(가장 최신 질문)'의 의도**를 파악하는 것입니다.
+2.  후속 질문이 '그건 왜?', '그럼 OOO은?'과 같이 명백히 **이전 대화에 의존하는 경우에만** 대화 기록을 참고하여 완전한 질문으로 재구성하세요.
+3.  **만약 후속 질문이 이전 대화와 관련 없는 완전히 새로운 주제라면, 대화 기록을 무시하고 후속 질문을 그대로 반환하세요.**
+4.  질문에 절대 답하지 말고, 재구성된 질문만 반환해야 합니다.
+"""
+}
+# ==============================================================================
+# 4. Vision Prompts for Image Analysis (이미지 분석 전용 프롬프트)
+# ==============================================================================
+DEMO_VISION_PROMPTS = {
+    "Smart Analysis (Vision + RAG)": """You are 'EE-Assistant', a brilliant Electrical and Electronic Engineering problem solver. 
+You MUST use the following 'Retrieved Documents' as the primary source of truth to explain the concepts related to the image in your answer. Synthesize the information from the documents and the image to provide a comprehensive and accurate response.
+
+[Retrieved Documents]
+{context}
+""",
+    "TOEIC Grammar Expert (EE-Assistant)": """You are 'EE-Assistant', a world-class TOEIC grammar instructor. Your task is to analyze the provided grammar problem in the image and give a perfect explanation. Ensure your explanation is clear and easy to understand for students.
+
+Follow these three steps precisely:
+1.  **State the Answer:** Clearly state the correct choice (e.g., "(B) to solve").
+2.  **Provide the Rationale:** Explain the exact grammatical rule that determines the answer. Be concise and clear.
+3.  **Offer Additional Context:** Suggest related concepts or provide a simplified analogy if beneficial.
+""",
+    "Electrical/Electronic Engineering Problem Solver (EE-Assistant)": """You are 'EE-Assistant', a brilliant Electrical and Electronic Engineering problem solver. Analyze the provided problem from the image.
+
+Your response must include:
+1.  **Identify the Core Concept:** State the key electrical/electronic engineering concept required to solve the problem (e.g., "Ohm's Law", "Kirchhoff's Current Law").
+2.  **Step-by-Step Solution:** Provide a clear, step-by-step explanation of how to apply the concept to find the solution. Use formulas where appropriate.
+3.  **Final Answer:** Clearly state the final numerical or conceptual answer.
+4.  **Assumptions:** If any assumptions are made to solve the problem, state them explicitly.
+""",
+    "Image Content Describer (General Purpose)": """You are 'EE-Assistant', an intelligent image analysis assistant. Describe the content of the image provided.
+
+Focus on:
+1.  **Key Objects/Elements:** What are the main things visible in the image?
+2.  **Context/Purpose (if inferable):** What does the image seem to be about or for?
+3.  **Textual Information:** Transcribe any prominent text in the image.
+"""
+}
+
+# ==============================================================================
+# 5. Language-specific UI Texts (언어별 UI 텍스트)
+# ==============================================================================
+LANG_TEXT = {
+    'English': {
+        'create_new_kb_option': "-- Create New Database --",
+        'page_title': "Chat with your EE-Assistant!",
+        'settings_header': "Settings",
+        'api_select_label': "Select AI Provider",
+        'lang_select_label': "Language",
+        'kb_select_label': "Select Knowledge Base",
+        'kb_reset_button': "Delete Selected Knowledge Base",
+        'kb_reset_success': "Knowledge Base '{kb_name}' has been deleted.",
+        'new_kb_header': "Create New Knowledge Base",
+        'new_kb_name_label': "Enter a name for the new Knowledge Base:",
+        'new_kb_name_help': "Only English letters, numbers, hyphens (-), and underscores (_) are allowed.",
+        'invalid_kb_name_error': "Invalid name...",
+        'upload_label': "Upload files...",
+        'create_button': "Create!",
+        'upload_success': "File {file_name} uploaded successfully!",
+        'creating_db': "Creating Knowledge Base '{kb_name}'...",
+        'db_created_success': "Knowledge Base '{kb_name}' created.",
+        'chat_placeholder': "Ask me anything...",
+        'update_kb_header': "Update Selected Knowledge Base",
+        'update_upload_label': "Upload additional files:",
+        'update_button': "Add to Knowledge Base",
+        'updating_db': "Adding files to '{kb_name}'...",
+        'db_updated_success': "Knowledge Base '{kb_name}' updated.",
+        'api_key_header': "Enter Your API Key",
+        'api_key_label': "Your {api_provider} API Key",
+        'Knowledge_Base_Select': "Please select a Knowledge Base or create a new one.",
+        'api_key_help': "Your API key is not stored.",
+        'api_key_missing_error': "Please provide a valid API key to activate the AI.",
+        'chat_history_header': "Chat History",
+        'chat_history_save_button': "Save Chat",
+        'chat_history_load_label': "Load Chat",
+        'api_key_source_label': "API Key Source",
+        'api_key_source_local': "Use Local (.env/Secrets)",
+        'api_key_source_user': "Enter Manually",
+        'nvidia_korean_warning': "**NVIDIA models do not directly support Korean output.**\n\nTherefore, the accuracy of the answer may be reduced.", # 새로 추가된 NVIDIA 경고
+        
+        # --- Vision UI 텍스트 (이제 프롬프트도 여기에 포함) ---
+        'vision_expander_title': "✨ Image Analysis Expert (Gemini Vision)",
+        'vision_select_mode_label': "Select Analysis Mode:",
+        'vision_input_mode_label': "Select Image Source:",
+        'vision_input_mode_upload': "Upload File",
+        'vision_input_mode_url': "Enter Public URL",
+        'vision_upload_image_label': "Upload an image for analysis (JPG, PNG)",
+        'vision_url_input_label': "Enter Image URL (must be public):",
+        'vision_url_input_placeholder': "https://example.com/image.jpg",
+        'vision_question_input_label': "Ask a question about the image:",
+        'vision_question_placeholder': "e.g., Solve this problem / What is the core concept of this problem?",
+        'vision_analyze_button_label': "Start Image Analysis",
+        'vision_api_key_error_message': "Invalid API key. Please set your API key in the sidebar first.",
+        'vision_missing_input_warning': "Please select an image source and enter a question.",
+        'vision_not_supported_message': "Image analysis is supported only by Google (Gemini) models.",
+        'vision_spinner_message': "analyzing the image... 👁️",
+        'vision_smart_analysis_info': "Smart Analysis (Vision + RAG) mode only supports 'File Upload'.",
+
+        # --- 🚨 DEMO_VISION_PROMPTS 내용이 LANG_TEXT 내부로 이동 (영어 버전) ---
+        'vision_prompt_smart_analysis': """You are 'EE-Assistant', a brilliant Electrical and Electronic Engineering problem solver. 
+        You MUST use the following 'Retrieved Documents' as the primary source of truth to explain the concepts related to the image in your answer. Synthesize the information from the documents and the image to provide a comprehensive and accurate response.
+
+        [Retrieved Documents]
+        {context}
+        """,
+        'vision_prompt_toeic_expert': """You are 'EE-Assistant', a world-class TOEIC grammar instructor. Your task is to analyze the provided grammar problem in the image and give a perfect explanation. Ensure your explanation is clear and easy to understand for students.
+
+        Follow these three steps precisely:
+        1.  **State the Answer:** Clearly state the correct choice (e.g., "(B) to solve").
+        2.  **Provide the Rationale:** Explain the exact grammatical rule that determines the answer. Be concise and clear.
+        3.  **Offer Additional Context:** Suggest related concepts or provide a simplified analogy if beneficial.
+        """,
+        'vision_prompt_ee_problem_solver': """You are 'EE-Assistant', a brilliant Electrical and Electronic Engineering problem solver. Analyze the provided problem from the image.
+
+        Your response must include:
+        1.  **Identify the Core Concept:** State the key electrical/electronic engineering concept required to solve the problem (e.g., "Ohm's Law", "Kirchhoff's Current Law").
+        2.  **Step-by-Step Solution:** Provide a clear, step-by-step explanation of how to apply the concept to find the solution. Use formulas where appropriate.
+        3.  **Final Answer:** Clearly state the final numerical or conceptual answer.
+        4.  **Assumptions:** If any assumptions are made to solve the problem, state them explicitly.
+        """,
+        'vision_prompt_image_describer': """You are 'EE-Assistant', an intelligent image analysis assistant. Describe the content of the image provided.
+
+        Focus on:
+        1.  **Key Objects/Elements:** What are the main things visible in the image?
+        2.  **Context/Purpose (if inferable):** What does the image seem to be about or for?
+        3.  **Textual Information:** Transcribe any prominent text in the image.
+        """
+    },
+    'Korean': {
+        'create_new_kb_option': "-- 새로운 지식 베이스 만들기 --",
+        'page_title': "EE-Assistant에게 모르는 문제를 질문해 보세요!",
+        'settings_header': "설정",
+        'api_select_label': "AI 모델 선택",
+        'lang_select_label': "언어",
+        'kb_select_label': "지식 베이스 선택",
+        'kb_reset_button': "선택한 지식 베이스 삭제",
+        'kb_reset_success': "'{kb_name}' 지식 베이스가 삭제되었습니다.",
+        'new_kb_header': "새로운 지식 베이스 만들기",
+        'new_kb_name_label': "새 지식 베이스의 이름을 입력하세요:",
+        'new_kb_name_help': "이름은 영문, 숫자, 하이픈(-), 언더스코어(_)만 사용할 수 있습니다.",
+        'invalid_kb_name_error': "이름이 유효하지 않습니다...",
+        'upload_label': "새 지식 베이스에 사용할 파일을 업로드하세요:",
+        'create_button': "생성하기!",
+        'upload_success': "파일 {file_name} 업로드 성공!",
+        'creating_db': "'{kb_name}' 지식 베이스를 생성하는 중...",
+        'db_created_success': "'{kb_name}' 지식 베이스가 생성되었습니다.",
+        'chat_placeholder': "문서에 대해 무엇이든 물어보세요!",
+        'update_kb_header': "선택한 지식 베이스 업데이트",
+        'update_upload_label': "추가할 파일을 업로드하세요:",
+        'update_button': "지식 베이스에 추가",
+        'updating_db': "'{kb_name}'에 파일을 추가하는 중...",
+        'db_updated_success': "'{kb_name}' 지식 베이스가 성공적으로 업데이트되었습니다.",
+        'api_key_header': "API 키 입력",
+        'api_key_label': "{api_provider} API 키",
+        'api_key_help': "입력한 API 키는 저장되지 않습니다.",
+        'Knowledge_Base_Select': "새로운 지식베이스를 생성하거나 선택해주세요.",
+        'api_key_missing_error': "AI를 활성화하려면 유효한 API 키를 입력해주세요.",
+        'chat_history_header': "대화 기록",
+        'chat_history_save_button': "대화 내용 저장",
+        'chat_history_load_label': "대화 내용 불러오기",
+        'api_key_source_label': "API 키 사용 방식",
+        'api_key_source_local': "로컬 (.env/Secrets)",
+        'api_key_source_user': "직접 입력",
+        'nvidia_korean_warning': "**NVIDIA 모델은 한국어 출력을 직접적으로 지원하지 않습니다.**\n\n따라서 답변의 정확성이 떨어질 수 있습니다.", # 새로 추가된 NVIDIA 경고
+
+        # --- Vision UI 텍스트 (이제 프롬프트도 여기에 포함) ---
+        'vision_expander_title': "✨ 이미지 분석 (Gemini Vision 기반)",
+        'vision_select_mode_label': "분석 모드를 선택하세요:",
+        'vision_input_mode_label': "이미지 소스 선택:",
+        'vision_input_mode_upload': "파일 업로드",
+        'vision_input_mode_url': "공개 URL 입력",
+        'vision_upload_image_label': "분석할 문제 이미지를 업로드하세요 (JPG, PNG)",
+        'vision_url_input_label': "이미지 URL을 입력하세요 (공개된 주소):",
+        'vision_url_input_placeholder': "https://example.com/image.jpg",
+        'vision_question_input_label': "이미지에 대해 질문하세요:",
+        'vision_question_placeholder': "예: 이 문제 풀어줘 / 이 문제의 핵심 개념은 뭐야?",
+        'vision_analyze_button_label': "이미지 분석 시작하기",
+        'vision_api_key_error_message': "API 키가 유효하지 않습니다. 사이드바에서 API 키를 먼저 설정해주세요.",
+        'vision_missing_input_warning': "이미지 소스를 선택하고 질문을 입력해주세요.",
+        'vision_not_supported_message': "이미지 분석 기능은 Google (Gemini) 모델에서만 지원됩니다.",
+        'vision_spinner_message': "이미지 분석 중... 👁️",
+        'vision_smart_analysis_info': "Smart Analysis (Vision + RAG) 모드는 '파일 업로드'만 지원합니다.",
+
+
+        # --- 🚨 DEMO_VISION_PROMPTS 내용이 LANG_TEXT 내부로 이동 (한국어 버전) ---
+        'vision_prompt_smart_analysis': """당신은 'EE-Assistant'라는 이름의 뛰어난 전기전자공학 문제 해결사입니다.
+        제공된 이미지를 분석하고, '검색된 문서'를 주된 근거로 사용하여 이미지와 관련된 개념을 포괄적이고 정확하게 설명해야 합니다.
+
+        [검색된 문서]
+        {context}
+        """,
+        'vision_prompt_toeic_expert': """당신은 'EE-Assistant'라는 이름의 세계적인 토익 문법 강사입니다. 이미지에 제시된 문법 문제를 분석하고 완벽한 설명을 제공하는 것이 당신의 임무입니다. 학생들이 이해하기 쉽고 명확하게 설명해야 합니다.
+
+        다음 세 단계를 정확히 따르십시오:
+        1.  **정답 제시:** 올바른 보기를 명확하게 밝히세요 (예: "(B) to solve").
+        2.  **근거 설명:** 정답을 결정하는 정확한 문법 규칙을 설명하세요. 간결하고 명확하게 작성하세요.
+        3.  **추가 컨텍스트 제공:** 필요하다면 관련 개념을 제시하거나, 간단한 비유를 들어 설명하세요.
+        """,
+        'vision_prompt_ee_problem_solver': """당신은 'EE-Assistant'라는 이름의 뛰어난 전기전자공학 문제 해결사입니다. 이미지에 제시된 문제를 분석하십시오.
+
+        당신의 답변에는 다음 내용이 포함되어야 합니다:
+        1.  **핵심 개념 식별:** 문제 해결에 필요한 핵심 전기/전자공학 개념을 명시하세요 (예: "옴의 법칙", "키르히호프의 전류 법칙").
+        2.  **단계별 해결책:** 개념을 적용하여 해결책을 찾는 방법에 대한 명확하고 단계별 설명을 제공하십시오. 필요에 따라 공식을 사용하세요.
+        3.  **최종 답변:** 최종 숫자 또는 개념적 답변을 명확하게 명시하세요.
+        4.  **가정:** 문제 해결을 위해 어떤 가정을 했다면, 이를 명시적으로 밝히세요.
+        """,
+        'vision_prompt_image_describer': """당신은 'EE-Assistant'라는 이름의 지능형 이미지 분석 보조 어시스턴트입니다. 제공된 이미지의 내용을 묘사하십시오.
+
+        초점:
+        1.  **주요 객체/요소:** 이미지에서 주로 보이는 것은 무엇입니까?
+        2.  **맥락/목적 (추론 가능하다면):** 이미지가 무엇에 관한 것이거나 어떤 용도인 것 같습니까?
+        3.  **텍스트 정보:** 이미지 내에 있는 주요 텍스트를 전사하십시오.
+        """
+    }
+}
