@@ -3,9 +3,9 @@
 from PIL import Image
 import nest_asyncio
 nest_asyncio.apply()
-from streamlit_lottie import st_lottie
 import json
 import streamlit as st
+from streamlit_lottie import st_lottie
 import os
 import shutil
 import re
@@ -29,7 +29,9 @@ if "messages" not in st.session_state: st.session_state.messages = []
 if "retriever" not in st.session_state: st.session_state.retriever = None
 if "selected_kb" not in st.session_state: st.session_state.selected_kb = LANG_TEXT[st.session_state.language]['create_new_kb_option']
 if "user_api_key" not in st.session_state: st.session_state.user_api_key = ""
-
+# if "multimodal_engine" not in st.session_state: st.session_state.multimodal_engine = None # ✨ 이것도 추가하면 더 좋습니다.
+# if "use_multimodal" not in st.session_state: st.session_state.use_multimodal = False
+# ✨ --- 수정된 부분 시작 (이 줄을 추가하세요) --- ✨
 
 lang = LANG_TEXT[st.session_state.language]
 create_new_kb_option = lang['create_new_kb_option']
@@ -41,15 +43,24 @@ if st.session_state.api_key_source not in valid_api_sources:
     st.session_state.api_key_source = lang['api_key_source_local']
 
 # --- 헬퍼 및 콜백 함수 ---
-def get_knowledge_bases(): return [d for d in os.listdir(KNOWLEDGE_BASE_DIR) if os.path.isdir(os.path.join(KNOWLEDGE_BASE_DIR, d))]
+def get_knowledge_bases(include_create_new=True):
+    # '방(폴더)' 목록을 가져옵니다.
+    db_list = [d for d in os.listdir(KNOWLEDGE_BASE_DIR) if os.path.isdir(os.path.join(KNOWLEDGE_BASE_DIR, d))]
+    if include_create_new:
+        # 컨시어지가 '특별 서비스'를 항상 목록 맨 앞에 추가하도록 합니다.
+        return [create_new_kb_option] + db_list
+    else:
+        return db_list
 def is_valid_kb_name(name): return re.match("^[A-Za-z0-9_-]+$", name) is not None
 def on_change_reset_retriever(): st.session_state.retriever = None
-def on_api_provider_change(): st.session_state.retriever = None; st.session_state.user_api_key = ""
+def on_api_provider_change(): 
+    st.session_state.retriever = None
+    st.session_state.user_api_key = ""
+    st.session_state.api_key_changed = True
 def on_language_change(): st.session_state.messages = []
 def on_kb_select_change():
     st.session_state.retriever = None
     st.session_state.selected_kb = st.session_state.kb_selector
-@st.cache_resource
 def get_models(api_provider, user_api_key): return rag_core.load_models(api_provider, user_api_key)
 def process_chat_load():
     if 'chat_file_uploader' in st.session_state and st.session_state.chat_file_uploader is not None:
@@ -153,6 +164,16 @@ with st.sidebar:
             st.session_state.selected_kb = create_new_kb_option
             st.rerun()
     st.divider()
+    # # ✨ --- 수정된 부분 시작 --- ✨
+    # use_multimodal = st.toggle("✨ Enable Vision DB (Multimodal RAG)", value=st.session_state.use_multimodal, help="...")
+    
+    # # 토글 상태가 변경되었는지 감지하는 로직 추가
+    # if use_multimodal != st.session_state.use_multimodal:
+    #     st.session_state.use_multimodal = use_multimodal
+    #     st.session_state.retriever = None # 모든 엔진/리트리버 리셋
+    #     st.session_state.multimodal_engine = None
+    #     st.rerun() # 앱을 재실행하여 올바른 엔진을 로드하도록 함
+    # # ✨ --- 수정된 부분 끝 --- ✨
     
     # 채팅 저장/불러오기 UI
     st.subheader(lang['chat_history_header'])
@@ -185,40 +206,127 @@ if st.session_state.api_key_source == lang['api_key_source_local']:
     except: final_api_key = os.getenv(f"{st.session_state.api_provider.upper()}_API_KEY")
 else: final_api_key = st.session_state.user_api_key
 
-llm, embedder = get_models(st.session_state.api_provider, final_api_key)
-api_key_ok = llm is not None
+if "llm" not in st.session_state or "embedder" not in st.session_state or st.session_state.get("api_key_changed", False):
+    with st.spinner("Loading AI models..."):
+        st.session_state.llm, st.session_state.embedder = rag_core.load_models(
+            st.session_state.api_provider, final_api_key
+        )
+    st.session_state.api_key_changed = False # 플래그 리셋
 
+llm, embedder = st.session_state.llm, st.session_state.embedder
+api_key_ok = llm is not None
 if api_key_ok:
+    # --- KB 생성 로직 ---
     if 'submitted' in locals() and submitted:
-        if not new_kb_name or not is_valid_kb_name(new_kb_name): st.error(lang['invalid_kb_name_error'])
-        elif not uploaded_files: st.warning("Please upload files.")
+        if not new_kb_name or not is_valid_kb_name(new_kb_name):
+            st.error(lang['invalid_kb_name_error'])
+        elif not uploaded_files:
+            st.warning("Please upload files.")
         else:
             if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
             os.makedirs(DOCS_DIR)
             for file in uploaded_files:
-                with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
-            with st.spinner(lang['creating_db'].format(kb_name=new_kb_name)):
-                rag_core.create_and_save_retriever(embedder, new_kb_name)
+                with open(os.path.join(DOCS_DIR, file.name), "wb") as f:
+                    f.write(file.read())
+            
+            try:
+                # if st.session_state.use_multimodal:
+                #     # Vision DB 모드일 때: 멀티모달 인덱스 생성
+                #     with st.spinner(f"Creating Vision DB '{new_kb_name}'..."):
+                #         rag_core.create_multimodal_index(new_kb_name, final_api_key)
+                #     st.success(f"Vision DB '{new_kb_name}' created.")
+            
+                # 텍스트 DB 모드일 때: 기존 리트리버 생성
+                with st.spinner(lang['creating_db'].format(kb_name=new_kb_name)):
+                    rag_core.create_and_save_retriever(llm,embedder, new_kb_name)
                 st.success(lang['db_created_success'].format(kb_name=new_kb_name))
-                st.session_state.selected_kb = new_kb_name; st.rerun()
+                
+                st.session_state.selected_kb = new_kb_name
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to create Knowledge Base: {e}")
+                st.error(f"새 지식베이스를 생성하지 못하였습니다: {e}")
+    # --- KB 업데이트 로직 ---
     if 'update_submitted' in locals() and update_submitted:
-        if not update_files: st.warning("Please upload files to add.")
+        if not update_files:
+            st.warning("Please upload files to add.")
         else:
+            # 새로 업로드된 파일을 임시 폴더에 저장
             if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
             os.makedirs(DOCS_DIR)
             for file in update_files:
-                with open(os.path.join(DOCS_DIR, file.name), "wb") as f: f.write(file.read())
-            with st.spinner(lang['updating_db'].format(kb_name=st.session_state.selected_kb)):
-                st.session_state.retriever = rag_core.update_and_save_retriever(embedder, st.session_state.selected_kb)
-                st.success(lang['db_updated_success'].format(kb_name=st.session_state.selected_kb))
-            if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
-    if st.session_state.retriever is None and st.session_state.selected_kb != create_new_kb_option:
-        with st.spinner(f"Loading '{st.session_state.selected_kb}'..."):
-            st.session_state.retriever = rag_core.load_retriever(embedder, st.session_state.selected_kb)
-        if st.session_state.retriever: st.sidebar.success(f"'{st.session_state.selected_kb}' loaded.")
+                with open(os.path.join(DOCS_DIR, file.name), "wb") as f:
+                    f.write(file.read())
 
+            try:
+                # 현재 모드에 따라 올바른 업데이트 함수를 호출
+                # if st.session_state.use_multimodal:
+                #     # <<< 핵심 수정: 새로 만든 효율적인 업데이트 함수를 호출합니다 >>>
+                #     with st.spinner(f"Updating Vision DB '{st.session_state.selected_kb}'..."):
+                #         rag_core.update_multimodal_index(st.session_state.selected_kb, final_api_key)
+                #     st.success(f"Vision DB '{st.session_state.selected_kb}' updated.")
+                
+                # 기존 텍스트 DB 업데이트 로직은 그대로 유지
+                with st.spinner(lang['updating_db'].format(kb_name=st.session_state.selected_kb)):
+                    st.session_state.retriever = rag_core.update_and_save_retriever(llm,embedder, st.session_state.selected_kb)
+                st.success(lang['db_updated_success'].format(kb_name=st.session_state.selected_kb))
+
+                # 작업 완료 후 임시 폴더 정리 및 앱 재실행
+                if os.path.exists(DOCS_DIR): shutil.rmtree(DOCS_DIR)
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to update Knowledge Base: {e}")
+                st.error(f"새 지식베이스를 업데이트하지 못하였습니다: {e}")
+            # ✨ --- 수정된 부분 끝 --- ✨
+
+    
+        
+if api_key_ok and st.session_state.selected_kb != create_new_kb_option:
+    if st.session_state.api_provider == 'Google':
+    #     if st.session_state.multimodal_engine is None:
+    #         with st.spinner(f"Loading Vision DB '{st.session_state.selected_kb}'..."):
+    #             # "로드" 전용 함수를 호출합니다.
+    #             st.session_state.multimodal_engine = rag_core.load_multimodal_query_engine(
+    #                 st.session_state.selected_kb, final_api_key
+    #             )
+    #         if st.session_state.multimodal_engine:
+    #             st.sidebar.success(f"Vision DB '{st.session_state.selected_kb}' loaded.")
+    #     st.session_state.retriever = None
+    # # 기존 텍스트 기반 RAG 모드일 때
+    # else:
+        if st.session_state.retriever is None:
+            with st.spinner(f"Loading Text DB '{st.session_state.selected_kb}'..."):
+                st.session_state.retriever = rag_core.load_retriever(embedder, st.session_state.selected_kb)
+            if st.session_state.retriever: 
+                st.sidebar.success(f"Text DB '{st.session_state.selected_kb}' loaded.")
+        st.session_state.multimodal_engine = None # 반대쪽 엔진은 비활성화
 
 final_page_title = lang['page_title']
+# --- 학습 노트 생성 기능 ---
+# 대화가 어느정도 진행된 후에만 버튼이 보이도록 함
+if len(st.session_state.messages) > 3:
+    st.divider()
+    if st.button("📝 현재까지 대화 내용으로 학습 노트 만들기"):
+        
+        st.subheader("✨ AI 생성 학습 노트 ✨")
+        
+        with st.spinner("AI가 대화 내용을 분석하여 학습 노트를 만들고 있습니다..."):
+            # 스트리밍으로 화면에 표시하고, 전체 내용은 변수에 저장
+            full_markdown = st.write_stream(rag_core.stream_study_guide(llm, st.session_state.messages))
+
+        with st.spinner("PDF 파일 변환 중..."):
+            # Markdown을 PDF 바이트로 변환
+            pdf_output = rag_core.save_markdown_to_pdf(full_markdown)
+
+        # PDF 다운로드 버튼 제공
+        st.download_button(
+            label="📥 A4 학습 노트 다운로드 (.pdf)",
+            data=pdf_output,
+            file_name="ai_study_guide.pdf",
+            mime="application/pdf",
+        )
+
+    st.divider()
 # --- 시연용 특수 기능: 이미지 분석 (Gemini Vision Demo) 섹션 ---
 if st.session_state.api_provider == 'Google':
     # lang 딕셔너리에서 직접 가져옴
@@ -356,126 +464,211 @@ for message in st.session_state.messages:
             st.image(message["image"], width=300)
 
 if not api_key_ok: st.info(lang['api_key_missing_error'])
-elif not st.session_state.retriever: st.info(lang['Knowledge_Base_Select'])
-# app.py 파일 하단, 일반 RAG 채팅 로직 (else: 블록 전체)
+# <<< 핵심 수정: retriever와 multimodal_engine 둘 다 없는 경우에만 메시지 표시 >>>
+elif not st.session_state.retriever: 
+    if st.session_state.selected_kb != create_new_kb_option:
+        # KB는 선택되었지만 로딩 중일 수 있으므로, 별도 메시지는 잠시 보류하거나 스피너와 연동
+        pass
+    else:
+        st.info(lang['Knowledge_Base_Select'])
 
-else:
-    # 현재 언어 설정에 맞는 프롬프트를 각각 가져옵니다.
-    system_prompt = SYSTEM_PROMPTS[st.session_state.language]
-    contextualize_q_prompt_str = CONTEXTUALIZE_Q_PROMPTS[st.session_state.language]
-    # ✨ --- 올바른 디버깅 코드 시작 --- ✨
-    
-    # # 1. rag_core에서 했던 것과 똑같이, 질문 재구성기('history_aware_retriever')를 직접 생성합니다.
-    # #    (rag_core와 langchain.chains에서 필요한 함수들을 import 해야 합니다)
-    # from langchain.chains import create_history_aware_retriever
-    # from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+# --- ✨ [수정] 채팅 로직 통합 ---
+if user_input := st.chat_input(lang['chat_placeholder']):
+    st.session_state.messages.append({"role": "user", "content": user_input})
+    with st.chat_message("user"):
+        st.markdown(user_input)
 
-    # contextualize_q_prompt = ChatPromptTemplate.from_messages([
-    #     ("system", contextualize_q_prompt_str),
-    #     MessagesPlaceholder("chat_history"),
-    #     ("human", "{input}"),
-    # ])
-    # history_aware_retriever = create_history_aware_retriever(
-    #     llm, st.session_state.retriever, contextualize_q_prompt
-    #)
-    # ✨ --- 올바른 디버깅 코드 끝 --- ✨
-
-    # 이전 대화 기록을 LangChain이 이해하는 형태로 변환
-    chat_history_for_chain = [HumanMessage(content=msg["content"]) if msg["role"] == "user" else AIMessage(content=msg["content"]) for msg in st.session_state.messages[:-1]]
-    
-    # 대화형 RAG 체인 생성
-    conversational_rag_chain = rag_core.create_conversational_rag_chain(llm, st.session_state.retriever, SYSTEM_PROMPTS[st.session_state.language],contextualize_q_prompt_str )
-
-    user_input = st.chat_input(lang['chat_placeholder'])
-    if user_input:
-        st.session_state.messages.append({"role": "user", "content": user_input})
+    # 2. AI 어시스턴트 답변 UI 처리 (공통)
+    with st.chat_message("assistant"):
+        message_placeholder = st.empty()
         
-        
-        # ✨ --- 디버깅 출력 코드 시작 --- ✨
-        # 1. 위에서 만든 재구성기를 직접 실행하여 결과를 확인합니다.
-        #    이것이 실제로 RAG 검색에 사용될 '재구성된 질문'입니다.
-        # rephrased_question_docs = history_aware_retriever.invoke({
-        #     "chat_history": chat_history_for_chain,
-        #     "input": user_input
-        # })
-        # # 2. 터미널(콘솔)에 재구성된 질문을 출력합니다.
-        # #    history_aware_retriever는 문서(Document) 객체의 리스트를 반환합니다.
-        # print("==============================================")
-        # print(f"👤 원본 질문: {user_input}")
-        # print(f"🤖 재구성 후 검색된 문서 개수: {len(rephrased_question_docs)}")
-        # print("📝 검색된 문서 내용 (재구성된 질문의 결과):")
-        # for i, doc in enumerate(rephrased_question_docs):
-        #     print(f"--- 문서 {i+1} ---\n{doc.page_content}\n")
-        # print("==============================================")
-        # # ✨ --- 디버깅 출력 코드 끝 --- ✨
-        with st.chat_message("user"):
-            st.markdown(user_input)
+        # "Thinking" 애니메이션 (공통)
+        try:
+            lottie_thinking_json = load_lottiefile("UI_Animation/Material wave loading.json")
+            with message_placeholder.container():
+                col1, _ = st.columns([1, 6.3])
+                with col1:
+                    st_lottie(lottie_thinking_json, height=130, width=80, quality='medium', key="thinking_animation")
+        except Exception:
+            message_placeholder.markdown("EE-Assistant is thinking... ▌")
 
-        with st.chat_message("assistant"):
-            LOTTIE_FILE_PATH = "UI_Animation/Material wave loading.json"
-            message_placeholder = st.empty()
+        # 참고 자료 expander (공통)
+        source_expander = st.expander("참고 자료 (Source Documents)")
+        source_container = source_expander.container()
 
-            # 1. 모든 요소(Lottie, 텍스트, 최종 답변)가 그려질 단 하나의 placeholder를 만듭니다.
-           
-            # ✨ --- Thinking 애니메이션 로직 시작 --- ✨
-            try:
-                # 2. 로컬 Lottie 파일을 로드합니다. (경로 확인 필수)
-                #    이 로직은 매번 실행되므로, 파일 로드 함수 위에 @st.cache_data를 붙이는 것이 성능에 좋습니다.
-                lottie_thinking_json = load_lottiefile("UI_Animation/Material wave loading.json")
-                
-                # 3. placeholder 안에 container를 만들고, 그 안에 컬럼과 모든 요소를 배치합니다.
-                with message_placeholder.container():
-                    col1, col2 = st.columns([1, 6.3]) # 찾으신 최적의 비율
-                    
-                    with col1:
-                        st_lottie(
-                            lottie_thinking_json,
-                            height=130,
-                            width=80,
-                            quality='medium',
-                            key="thinking" # key는 간단하게 하나만 지정
-                        )
-                    
+        full_response = ""
+        sources = []
 
-            except FileNotFoundError:
-                # Lottie 파일을 찾지 못할 경우를 대비한 예외 처리
-                message_placeholder.markdown("EE-Assistant is thinking... ▌")
-            except Exception as e:
-                # 기타 Lottie 관련 에러 발생 시
-                print(f"Lottie Error: {e}")
-                message_placeholder.markdown("EE-Assistant is thinking... ▌")
-            # ✨ --- Thinking 애니메이션 로직 끝 --- ✨
+        # 3. RAG 모드에 따라 답변 생성 로직 분기
+        # Vision DB 모드
+        # if st.session_state.use_multimodal and st.session_state.multimodal_engine:
+        #     response_object = st.session_state.multimodal_engine.query(user_input)
+        #     full_response = response_object.response
+        #     source_files = [node.metadata.get('file_path', 'Unknown') for node in response_object.source_nodes]
+        #     sources = [os.path.basename(source) for source in set(source_files)] # 파일 이름만 추출
+        #     message_placeholder.markdown(full_response) # Vision 모드는 스트리밍이 아니므로 바로 표시
+
+        # 텍스트 DB 모드
+        if st.session_state.retriever:
+            chat_history_for_chain = [
+                HumanMessage(content=msg["content"]) if msg["role"] == "user" else AIMessage(content=msg["content"])
+                for msg in st.session_state.messages[:-1] # 마지막 user_input은 제외
+            ]
             
-
-            # 2. 소스(참고 자료)가 표시될 expander를 미리 만듭니다. (내용은 비어있음)
-            source_expander = st.expander("참고 자료 (Source Documents)")
-            source_container = source_expander.container() # expander 내부에 컨텐츠를 추가할 컨테이너
+            conversational_rag_chain = rag_core.create_conversational_rag_chain(
+                llm, st.session_state.retriever, system_prompt, CONTEXTUALIZE_Q_PROMPTS[st.session_state.language]
+            )
             
-            full_response = ""
-            
-            # 3. 스피너는 이제 답변 생성 '과정 전체'가 아니라, '첫 응답이 오기 전까지'만 보여줍니다.
-            #    여기서는 스피너를 제거하고, placeholder에 직접 상태를 표시하는 것이 더 좋습니다.
-            # message_placeholder.markdown("EE-Assistant is thinking... :thinking:") # replaced with lottie anime 
-
-            # 4. rag_core에서 답변과 소스를 스트리밍으로 받아옵니다.
             responses = rag_core.get_response(user_input, chat_history_for_chain, conversational_rag_chain)
             
             sources_processed = False
             for response in responses:
-                # 5. 소스 처리 (단 한 번만 실행)
                 if "sources" in response and not sources_processed:
-                    with source_container:
-                        for source in set(response["sources"]): # 중복 제거
-                            st.write(f"- {source}")
-                    sources_processed = True # 플래그를 설정하여 다시는 실행되지 않도록 함
-
-                # 6. 답변 조각 처리
+                    sources = list(set(response["sources"]))
+                    sources_processed = True
                 if "chunk" in response:
                     full_response += response["chunk"]
                     message_placeholder.markdown(full_response + "▌")
+            message_placeholder.markdown(full_response) # 스트리밍 완료 후 커서 제거
 
-            # 7. 스트리밍이 끝나면 커서(▌)를 제거한 최종본을 표시합니다.
-            message_placeholder.markdown(full_response)
+        # 4. 최종 결과 및 출처 표시 (공통)
+        with source_container:
+            for source in sources:
+                st.write(f"- {source}")
+        
+        # 5. 대화 기록 저장 (공통)
+        st.session_state.messages.append({"role": "assistant", "content": full_response})
+# ✨ --- 수정된 부분 시작 --- ✨
+# # # 기존 else 블록 전체를 이 if/elif 구조로 교체합니다.
+# # # Vision DB 모드가 활성화되었고, 엔진이 준비되었을 때
+# # if st.session_state.use_multimodal and st.session_state.multimodal_engine:
+# #     user_input = st.chat_input("Ask about text or images in your documents...")
+# #     if user_input:
+# #         st.session_state.messages.append({"role": "user", "content": user_input})
+# #         with st.chat_message("user"):
+# #             st.markdown(user_input)
+        
+# #         with st.chat_message("assistant"):
+# #             # [수정됨] 텍스트 RAG와 동일한 UI/UX 로직 적용
+# #             message_placeholder = st.empty()
+
+# #             # --- Thinking 애니메이션 로직 ---
+# #             try:
+# #                 lottie_thinking_json = load_lottiefile("UI_Animation/Material wave loading.json")
+# #                 with message_placeholder.container():
+# #                     col1, _ = st.columns([1, 6.3])
+# #                     with col1:
+# #                         st_lottie(lottie_thinking_json, height=130, width=80, quality='medium', key="thinking_vision")
+# #             except Exception:
+# #                 message_placeholder.markdown("EE-Assistant is thinking... ▌")
+
+# #             # --- 소스 표시 로직 ---
+# #             source_expander = st.expander("참고 자료 (Source Documents)")
+# #             source_container = source_expander.container()
+
+# #             # LlamaIndex 엔진을 호출하고 결과를 분해
+# #             response_object = st.session_state.multimodal_engine.query(user_input)
             
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
-            # --- ✨ 개선된 로직 끝 ---
+# #             # 답변 텍스트 추출
+# #             full_response = response_object.response
+            
+# #             # 소스 정보 추출 및 표시
+# #             sources = [node.metadata.get('file_path', 'Unknown') for node in response_object.source_nodes]
+# #             with source_container:
+# #                 for source in set(sources): # 중복 제거
+# #                     # 전체 경로 대신 파일 이름만 표시하도록 수정
+# #                     st.write(f"- {os.path.basename(source)}")
+            
+# #             # 최종 답변 표시
+# #             message_placeholder.markdown(full_response)
+# #             st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+# # # 텍스트 DB 모드이고, 리트리버가 준비되었을 때
+# # elif not st.session_state.use_multimodal and st.session_state.retriever:
+# #     # 이 부분은 이전에 완성했던 LangChain 채팅 로직을 그대로 사용합니다.
+# #     # 불필요한 디버깅 코드는 정리합니다.
+# #     system_prompt = SYSTEM_PROMPTS[st.session_state.language]
+# #     contextualize_q_prompt_str = CONTEXTUALIZE_Q_PROMPTS[st.session_state.language]
+# #     conversational_rag_chain = rag_core.create_conversational_rag_chain(
+# #         llm, st.session_state.retriever, system_prompt, contextualize_q_prompt_str
+# #     )
+    
+# #     user_input = st.chat_input(lang['chat_placeholder'])
+# #     if user_input:
+# #         chat_history_for_chain = [
+# #             HumanMessage(content=msg["content"]) if msg["role"] == "user" 
+# #             else AIMessage(content=msg["content"]) 
+# #             for msg in st.session_state.messages
+# #         ]
+# #         st.session_state.messages.append({"role": "user", "content": user_input})
+# #         with st.chat_message("user"):
+# #             st.markdown(user_input)
+
+# #         with st.chat_message("assistant"):
+# #             LOTTIE_FILE_PATH = "UI_Animation/Material wave loading.json"
+# #             message_placeholder = st.empty()
+
+# #             # 1. 모든 요소(Lottie, 텍스트, 최종 답변)가 그려질 단 하나의 placeholder를 만듭니다.
+           
+# #             # ✨ --- Thinking 애니메이션 로직 시작 --- ✨
+# #             try:
+# #                 # 2. 로컬 Lottie 파일을 로드합니다. (경로 확인 필수)
+# #                 #    이 로직은 매번 실행되므로, 파일 로드 함수 위에 @st.cache_data를 붙이는 것이 성능에 좋습니다.
+# #                 lottie_thinking_json = load_lottiefile("UI_Animation/Material wave loading.json")
+                
+# #                 # 3. placeholder 안에 container를 만들고, 그 안에 컬럼과 모든 요소를 배치합니다.
+# #                 with message_placeholder.container():
+# #                     col1, col2 = st.columns([1, 6.3]) # 찾으신 최적의 비율
+                    
+# #                     with col1:
+# #                         st_lottie(
+# #                             lottie_thinking_json,
+# #                             height=130,
+# #                             width=80,
+# #                             quality='medium',
+# #                             key="thinking" # key는 간단하게 하나만 지정
+# #                         )
+                    
+
+# #             except FileNotFoundError:
+# #                 # Lottie 파일을 찾지 못할 경우를 대비한 예외 처리
+# #                 message_placeholder.markdown("EE-Assistant is thinking... ▌")
+# #             except Exception as e:
+# #                 # 기타 Lottie 관련 에러 발생 시
+# #                 print(f"Lottie Error: {e}")
+# #                 message_placeholder.markdown("EE-Assistant is thinking... ▌")
+# #             # ✨ --- Thinking 애니메이션 로직 끝 --- ✨
+            
+
+# #             # 2. 소스(참고 자료)가 표시될 expander를 미리 만듭니다. (내용은 비어있음)
+# #             source_expander = st.expander("참고 자료 (Source Documents)")
+# #             source_container = source_expander.container() # expander 내부에 컨텐츠를 추가할 컨테이너
+            
+# #             full_response = ""
+            
+# #             # 3. 스피너는 이제 답변 생성 '과정 전체'가 아니라, '첫 응답이 오기 전까지'만 보여줍니다.
+# #             #    여기서는 스피너를 제거하고, placeholder에 직접 상태를 표시하는 것이 더 좋습니다.
+# #             # message_placeholder.markdown("EE-Assistant is thinking... :thinking:") # replaced with lottie anime 
+
+# #             # 4. rag_core에서 답변과 소스를 스트리밍으로 받아옵니다.
+# #             responses = rag_core.get_response(user_input, chat_history_for_chain, conversational_rag_chain)
+            
+# #             sources_processed = False
+# #             for response in responses:
+# #                 # 5. 소스 처리 (단 한 번만 실행)
+# #                 if "sources" in response and not sources_processed:
+# #                     with source_container:
+# #                         for source in set(response["sources"]): # 중복 제거
+# #                             st.write(f"- {source}")
+# #                     sources_processed = True # 플래그를 설정하여 다시는 실행되지 않도록 함
+
+# #                 # 6. 답변 조각 처리
+# #                 if "chunk" in response:
+# #                     full_response += response["chunk"]
+# #                     message_placeholder.markdown(full_response + "▌")
+
+# #             # 7. 스트리밍이 끝나면 커서(▌)를 제거한 최종본을 표시합니다.
+# #             message_placeholder.markdown(full_response)
+            
+# #             st.session_state.messages.append({"role": "assistant", "content": full_response})
+# #             # --- ✨ 개선된 로직 끝 ---

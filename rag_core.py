@@ -1,8 +1,25 @@
 # rag_core.py
 import os
 import pickle
+# import json
 from dotenv import load_dotenv
 import base64
+# import fsspec
+# --- LlamaIndex (멀티모달 RAG용) ---
+# from llama_index.core import (
+#     SimpleDirectoryReader,
+#     StorageContext,
+#     VectorStoreIndex,
+#     Settings,
+#     load_index_from_storage
+# )
+# from llama_index.readers.file import ImageReader, PDFReader # PDF와 이미지 리더를 명시적으로 임포트
+# from llama_index.vector_stores.faiss import FaissVectorStore # FAISS 벡터 저장소 사용
+# from llama_index.llms.google_genai import GoogleGenAI
+# from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+# import faiss # FAISS 라이브러리 직접 임포트
+
+
 from langchain_core.messages import HumanMessage,AIMessageChunk
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings 
@@ -26,27 +43,70 @@ from config import (
 
 load_dotenv()
 
-
-def load_documents_from_directory(directory):
+def load_and_process_documents(llm: ChatGoogleGenerativeAI, directory: str):
+    """
+    지정된 디렉토리에서 텍스트와 이미지 문서를 모두 로드합니다.
+    이미지 파일은 Vision LLM을 통해 텍스트로 변환됩니다.
+    """
     all_documents = []
+    image_extensions = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp']
+    
     for filename in os.listdir(directory):
         file_path = os.path.join(directory, filename)
+        file_ext = os.path.splitext(filename)[1].lower()
+
+        # --- 이미지 파일 처리 ---
+        if file_ext in image_extensions:
+            if isinstance(llm, ChatGoogleGenerativeAI):
+                print(f"🖼️  '{filename}' 이미지 파일을 분석하여 텍스트로 변환합니다...")
+                description = describe_image_with_vision(llm, file_path)
+                if description:
+                    # 이미지 설명을 page_content로, 파일명을 source로 하는 Document 객체 생성
+                    doc = Document(page_content=description, metadata={"source": filename})
+                    all_documents.append(doc)
+            else:
+                 print(f"⚠️ '{filename}'은 이미지 파일이지만, 현재 LLM은 Vision을 지원하지 않아 건너뜁니다.")
+            continue
+
+        # --- 기존 텍스트 파일 처리 ---
         loader = None
-        if filename.lower().endswith('.pdf'):
+        if file_ext == '.pdf':
             loader = PyPDFLoader(file_path)
-        elif filename.lower().endswith('.docx'):
+        elif file_ext == '.docx':
             loader = UnstructuredWordDocumentLoader(file_path)
-        elif filename.lower().endswith('.pptx'):
+        elif file_ext == '.pptx':
             loader = UnstructuredPowerPointLoader(file_path)
-        elif filename.lower().endswith('.txt'):
+        elif file_ext == '.txt':
             loader = TextLoader(file_path, encoding='utf-8')
+        
         if loader:
             try:
-                print(f"{filename} 파일을 처리합니다...")
+                print(f"📄 '{filename}' 텍스트 파일을 처리합니다...")
                 all_documents.extend(loader.load())
             except Exception as e:
                 print(f"'{filename}' 파일 처리 중 오류 발생: {e}")
+    
     return all_documents
+# def load_documents_from_directory(directory):
+#     all_documents = []
+#     for filename in os.listdir(directory):
+#         file_path = os.path.join(directory, filename)
+#         loader = None
+#         if filename.lower().endswith('.pdf'):
+#             loader = PyPDFLoader(file_path)
+#         elif filename.lower().endswith('.docx'):
+#             loader = UnstructuredWordDocumentLoader(file_path)
+#         elif filename.lower().endswith('.pptx'):
+#             loader = UnstructuredPowerPointLoader(file_path)
+#         elif filename.lower().endswith('.txt'):
+#             loader = TextLoader(file_path, encoding='utf-8')
+#         if loader:
+#             try:
+#                 print(f"{filename} 파일을 처리합니다...")
+#                 all_documents.extend(loader.load())
+#             except Exception as e:
+#                 print(f"'{filename}' 파일 처리 중 오류 발생: {e}")
+#     return all_documents
 
 
 def load_models(api_provider, api_key):
@@ -97,11 +157,11 @@ def get_splitters():
     return parent_splitter, child_splitter
 
 
-def create_and_save_retriever(embedder, kb_name):
+def create_and_save_retriever(llm,embedder, kb_name):
     if not os.path.exists(DOCS_DIR) or not os.listdir(DOCS_DIR):
         return None
 
-    raw_documents = load_documents_from_directory(DOCS_DIR)
+    raw_documents = load_and_process_documents(llm,DOCS_DIR)
     if not raw_documents:
         return None
 
@@ -151,18 +211,18 @@ def load_retriever(embedder, kb_name):
         return None
 
 
-def update_and_save_retriever(embedder, kb_name):
+def update_and_save_retriever(llm,embedder, kb_name):
     # 1. 기존 리트리버와 컴포넌트(vectorstore, docstore) 로드
     kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_name)
     try:
         retriever = load_retriever(embedder, kb_name)
         if retriever is None: # 로드 실패 시 새로 생성
-            return create_and_save_retriever(embedder, kb_name)
+            return create_and_save_retriever(llm,embedder, kb_name)
     except Exception:
-        return create_and_save_retriever(embedder, kb_name)
+        return create_and_save_retriever(llm,embedder, kb_name)
 
     # 2. 새로 추가할 문서만 로드
-    new_documents = load_documents_from_directory(DOCS_DIR)
+    new_documents = load_and_process_documents(llm,DOCS_DIR)
     if not new_documents:
         print("추가할 새로운 문서가 없습니다.")
         return retriever
@@ -251,6 +311,10 @@ def get_response(user_input, chat_history, rag_chain):
             full_response += response["answer"]
             yield {"chunk": response["answer"]}
         if "context" in response and response["context"]:
+            print("--- [참고된 텍스트] LANGCHAIN RAG CONTEXT ---")
+            context_text = "\n\n---\n\n".join([doc.page_content for doc in response["context"]])
+            print(context_text)
+            print("--- [참고된 텍스트] ---")
             # 소스 정보는 마지막에 한 번에 넘어오는 경우가 많습니다.
             sources = list(set([doc.metadata.get('source', 'Unknown') for doc in response["context"]]))
     
@@ -468,8 +532,356 @@ def get_fused_vision_rag_response(llm: ChatGoogleGenerativeAI, retriever, image_
     else:
         print(f"--- [DEBUG_LLM_STREAM] Full LLM response: \n{full_llm_debug_response} ---")
     # --- 🚨 LLM 스트림 디버깅 로직 끝 ---
+# rag_core.py의 멀티모달 함수 3개를 아래 코드로 교체하세요.
 
 
+def describe_image_with_vision(llm: ChatGoogleGenerativeAI, image_path: str) -> str:
+    """지정된 이미지 파일 경로를 받아 Vision LLM을 통해 상세한 텍스트 설명을 반환합니다."""
+    try:
+        # 1. MIME 타입 추론 (파일 확장자 기반)
+        import mimetypes
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if mime_type is None:
+            mime_type = 'image/jpeg' # 기본값
+
+        # 2. 이미지 파일을 열고 Base64로 인코딩
+        with open(image_path, "rb") as image_file:
+            image_b64 = base64.b64encode(image_file.read()).decode('utf-8')
+
+        image_data_url = f"data:{mime_type};base64,{image_b64}"
+
+        # 3. 이미지 설명을 위한 프롬프트
+        prompt = """You are an expert in analyzing images. Describe the following image in detail, including all visible text, objects, scenes, and concepts. The description should be comprehensive and optimized for later text-based semantic search. Respond only with the description, without any introductory phrases."""
+
+        message = HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": image_data_url}}
+            ]
+        )
+        
+        # 스트리밍 없이 한 번에 답변을 받음
+        response = llm.invoke([message])
+        print(response)
+        return response.content
+    except Exception as e:
+        print(f"❌ 이미지 설명 생성 중 오류 발생 ({os.path.basename(image_path)}): {e}")
+        return "" # 오류 발생 시 빈 문자열 반환
+# rag_core.py 파일 맨 아래에 아래 함수를 추가하세요.
+import json
+
+def stream_study_guide(llm, chat_history: list):
+    """
+    [이미지 제외 버전] 텍스트 채팅 기록만을 분석하여 Markdown 형식의 학습 노트를 스트리밍으로 생성합니다.
+    """
+    print("🧠 (텍스트 전용) 학습 노트 스트리밍 생성을 시작합니다...")
+
+    # 1. [수정] 이미지 정보를 제외하고 순수 텍스트 대화 기록만으로 재구성
+    history_for_prompt = []
+    for msg in chat_history:
+        role = "학생" if msg["role"] == "user" else "AI 튜터"
+        content = msg["content"]
+        
+        # 이미지와 관련된 메시지는 건너뛰거나 내용에서 이미지 관련 언급을 제거할 수 있습니다.
+        # 여기서는 간단하게 텍스트 내용만 포함합니다.
+        if content: # 내용이 비어있지 않은 경우에만 추가
+            history_for_prompt.append(f'{role}: {content}')
+    
+    formatted_history = "\n".join(history_for_prompt)
+
+    # 2. [수정] 시스템 프롬프트에서 이미지 관련 모든 지시사항 제거
+    system_prompt = f"""
+You are an expert tutor creating a study guide. Analyze the provided conversation history between a student and an AI tutor. Your task is to generate a well-structured study guide in Markdown format based on the key topics discussed in the text.
+
+The final output MUST strictly be in Markdown format and include the following sections:
+
+1.  **# 학습 노트: [대화의 핵심 주제]**
+    - 대화의 전체 주제를 요약하여 제목을 작성해주세요.
+
+2.  **## 📝 핵심 개념 요약**
+    - 대화에서 다루어진 가장 중요한 개념, 공식, 원리 등을 3~5개의 글머리 기호(bullet points)로 요약해주세요.
+
+3.  **## ✍️ 복습 퀴즈 (3문제)**
+    - 대화의 핵심 내용을 바탕으로, 학생이 자신의 이해도를 점검할 수 있는 객관식 또는 단답형 문제 3개를 만들어주세요.
+    형식:
+        **[문제 1]** (질문 내용)
+        **[문제 2]** (질문 내용)
+        **[문제 3]** (질문 내용)...
+        ...
+        ----------------------
+        **[문제 1]**
+        <정답 및 해설>
+        (답변 내용)
+        **[문제 2]** 
+        <정답 및 해설>
+        (답변 내용)
+
+Please generate the entire study guide based on the conversation below.
+
+---
+[대화 기록]
+{formatted_history}
+---
+"""
+    
+    try:
+        # invoke 대신 stream을 사용합니다.
+        stream = llm.stream(system_prompt)
+        for chunk in stream:
+            yield chunk.content # content 부분만 yield
+        print("✅ 학습 노트 스트리밍 생성이 완료되었습니다.")
+
+    except Exception as e:
+        print(f"❌ 학습 노트 생성 중 오류 발생: {e}")
+        yield f"학습 노트를 생성하는 중 오류가 발생했습니다: {e}"
+
+from fpdf import FPDF
+
+
+def save_markdown_to_pdf(markdown_content: str) -> bytes:
+    """
+    [fpdf2 최종 버전 - 레이아웃 수정] Markdown 텍스트를 안정적인 PDF로 변환합니다.
+    프로젝트 내부에 포함된 한글 폰트를 사용합니다.
+    """
+    print("📄 [fpdf2] Markdown을 PDF로 변환합니다...")
+
+    font_dir = "fonts"
+    regular_font_path = os.path.join(font_dir, "NotoSansKR-Regular.ttf")
+    bold_font_path = os.path.join(font_dir, "NotoSansKR-Bold.ttf")
+
+    pdf = FPDF()
+    pdf.add_page()
+    font_family = "NotoSansKR"
+
+    try:
+        if not os.path.exists(regular_font_path) or not os.path.exists(bold_font_path):
+             raise FileNotFoundError("폰트 파일('NotoSansKR-Regular.ttf' 또는 'NotoSansKR-Bold.ttf')을 'fonts' 폴더에서 찾을 수 없습니다.")
+
+        pdf.add_font(font_family, "", regular_font_path, uni=True)
+        pdf.add_font(font_family, "B", bold_font_path, uni=True)
+        pdf.set_font(font_family, size=11)
+        
+    except Exception as e:
+        print(f"⚠️ 경고: 한글 폰트 로드 중 오류 발생: {e}")
+        pdf.set_font("helvetica", size=11)
+        font_family = "helvetica"
+
+    # --- ▼▼▼ 핵심 수정 부분 (모든 multi_cell에 ln=1 추가) ▼▼▼ ---
+    for line in markdown_content.split('\n'):
+        line = line.strip()
+        if line.startswith('# '):
+            pdf.set_font(font_family, 'B', size=24)
+            pdf.multi_cell(0, 12, line.replace('# ', '').strip(), ln=1)
+            pdf.ln(5) # 제목 아래에 추가 간격
+        elif line.startswith('## '):
+            pdf.set_font(font_family, 'B', size=18)
+            pdf.multi_cell(0, 10, line.replace('## ', '').strip(), ln=1)
+            pdf.ln(3)
+        elif line.startswith('### '):
+            pdf.set_font(font_family, 'B', size=14)
+            pdf.multi_cell(0, 10, line.replace('### ', '').strip(), ln=1)
+            pdf.ln(1)
+        elif line.startswith('* ') or line.startswith('- '):
+            pdf.set_font(font_family, '', size=11)
+            pdf.multi_cell(0, 7, f"  • {line[2:].strip()}", ln=1)
+        elif line.startswith('<정답 및 해설>'):
+             pdf.set_font(font_family, 'B', size=11)
+             pdf.multi_cell(0, 7, line, ln=1)
+        elif line == "": # 빈 줄이면 간격을 조금 띄움
+            pdf.ln(3)
+        else:
+            pdf.set_font(font_family, '', size=11)
+            pdf.multi_cell(0, 7, line, ln=1)
+
+    print("✅ [fpdf2] PDF 변환 완료.")
+    return bytes(pdf.output(dest='S'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# --- ✨ [수정] 멀티모달 DB 생성, 로드, 업데이트 로직 완전 교체 ---
+
+# --- ✨ [수정] 멀티모달 DB 생성, 로드, 업데이트 로직 (FAISS 통일 최종본) ---
+
+# def is_valid_json(path):
+#     try:
+#         with open(path, "r", encoding="utf-8") as f:
+#             json.load(f)
+#         return True
+#     except Exception:
+#         return False
+
+
+    
+# def _get_metadata_path(kb_path):
+#     return os.path.join(kb_path, "index_metadata.json")
+
+
+# def _setup_settings(api_key: str):
+#     """API 키를 받아 LlamaIndex 전역 설정을 구성하는 헬퍼 함수"""
+#     Settings.llm = GoogleGenAI(model_name="models/gemini-1.5-pro-latest", api_key=api_key)
+#     Settings.embed_model = GoogleGenAIEmbedding(model_name="models/embedding-001", api_key=api_key)
+
+# def _get_document_reader():
+#     """PDF와 이미지 파일 파서를 포함하는 SimpleDirectoryReader를 반환하는 헬퍼 함수"""
+#     return SimpleDirectoryReader(
+#         DOCS_DIR,
+#         file_extractor={
+#             ".pdf": PDFReader(),
+#             ".png": ImageReader(parse_text=True),
+#             ".jpg": ImageReader(parse_text=True),
+#             ".jpeg": ImageReader(parse_text=True),
+#         }
+#     )
+
+# def create_multimodal_index(kb_name: str, api_key: str):
+#     """
+#     [수정됨] 문서를 로드하고, FAISS 벡터 저장소와 함께 VectorStoreIndex를 생성 후 한 번에 저장합니다.
+#     """
+#     kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_name)
+#     persist_path = os.path.join(kb_path, "multimodal_db")
+#     os.makedirs(persist_path, exist_ok=True)
+
+#     _setup_settings(api_key)
+
+#     documents = _get_document_reader().load_data()
+#     if not documents:
+#         print("⚠️ 인덱싱할 문서가 없습니다.")
+#         return
+
+#     fs = fsspec.filesystem("file")
+
+#     # 2. FAISS 벡터 저장소 설정
+#     d = 768
+#     faiss_index = faiss.IndexFlatL2(d)
+#     vector_store = FaissVectorStore(faiss_index=faiss_index)
+
+#     # 3. StorageContext를 생성할 때, 위에서 만든 fs 객체를 전달
+#     storage_context = StorageContext.from_defaults(
+#         vector_store=vector_store, 
+#         fs=fs
+#     )
+    
+#     # 4. 변환된 노드로부터 인덱스 생성
+#     index = VectorStoreIndex(storage_context=storage_context)
+
+#     # 5. 인덱스 저장 (이제 fs에 설정된 UTF-8 인코딩을 사용하게 됨)
+#     index.storage_context.persist(persist_dir=persist_path)
+#     print(f"✅ '{kb_name}' 멀티모달 인덱스 생성 및 저장 완료. 경로: {persist_path}")
+
+
+# def load_multimodal_query_engine(kb_name: str, api_key: str):
+#     """
+#     [수정됨] 지정된 경로에서 전체 인덱스를 로드하여 쿼리 엔진을 반환합니다.
+#     """
+#     kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_name)
+#     persist_path = os.path.join(kb_path, "multimodal_db")
+
+#     if not os.path.exists(persist_path):
+#         print(f"⚠️ '{kb_name}'에 대한 인덱스 파일이 없습니다. 새로 생성해야 합니다.")
+#         # UI에서 새로 생성하도록 유도하기 위해 None 반환 또는 에러 발생
+#         return None
+
+#     _setup_settings(api_key)
+
+#     try:
+#         print(f"📂 '{kb_name}' 멀티모달 인덱스를 로드합니다...")
+#         # --- ▼▼▼ 핵심 수정 부분 시작 ▼▼▼ ---
+#         # 1. UTF-8 인코딩을 사용하는 파일 시스템 객체 생성
+#         fs = fsspec.filesystem("file")
+
+#         # 2. StorageContext를 불러올 때도 fs 객체를 전달
+#         storage_context = StorageContext.from_defaults(persist_dir=persist_path, fs=fs)
+        
+#         # 3. 수정된 storage_context로 인덱스 로드
+#         index = load_index_from_storage(storage_context)
+#         # --- ▲▲▲ 핵심 수정 부분 끝 ▲▲▲ ---
+#         print("✅ 멀티모달 인덱스 로드 성공.")
+#         return index.as_query_engine(streaming=True) # 스트리밍 활성화
+#     except Exception as e:
+#         print(f"❌ 인덱스 로드 실패: {e}")
+#         print("ℹ️ 저장된 인덱스가 손상되었거나 현재 라이브러리 버전과 호환되지 않을 수 있습니다.")
+#         print("ℹ️ 기존 DB를 삭제하고 다시 생성해 보세요.")
+#         return None
+
+# # 참고: update_multimodal_index 함수는 제공된 코드의 로직이 이미 효율적이므로 그대로 사용하셔도 좋습니다.
+# # 단, create와 load 함수는 위의 수정된 버전을 사용해야 합니다.
+# def _get_metadata_path(kb_path):
+#     return os.path.join(kb_path, "index_metadata.json")
+
+
+# def _load_metadata(kb_path):
+#     meta_path = _get_metadata_path(kb_path)
+#     if not os.path.exists(meta_path):
+#         return {}
+#     try:
+#         with open(meta_path, "r", encoding="utf-8") as f:
+#             return json.load(f)
+#     except json.JSONDecodeError:
+#         return {}
+
+
+# def _save_metadata(kb_path, metadata):
+#     with open(_get_metadata_path(kb_path), "w", encoding="utf-8") as f:
+#         json.dump(metadata, f, indent=2, ensure_ascii=False)
+
+
+# def update_multimodal_index(kb_name: str, api_key: str):
+#     kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_name)
+#     persist_path = os.path.join(kb_path, "multimodal_db")
+#     os.makedirs(persist_path, exist_ok=True)
+
+#     _setup_settings(api_key)
+
+#     prev_meta = _load_metadata(kb_path)
+#     all_files = [
+#         os.path.join(DOCS_DIR, f)
+#         for f in os.listdir(DOCS_DIR)
+#         if f.lower().endswith((".pdf", ".png", ".jpg", ".jpeg"))
+#     ]
+
+#     new_or_modified = []
+#     for file_path in all_files:
+#         mtime = os.path.getmtime(file_path)
+#         if file_path not in prev_meta or prev_meta[file_path] < mtime:
+#             new_or_modified.append(file_path)
+
+#     if not new_or_modified:
+#         print("✅ 인덱스가 최신 상태입니다. 새로운 문서가 없습니다.")
+#         return
+
+#     print(f"🧩 {len(new_or_modified)}개의 새(또는 수정된) 문서를 인덱스에 추가합니다...")
+
+#     try:
+#         storage_context = StorageContext.from_defaults(persist_dir=persist_path)
+#         index = load_index_from_storage(storage_context)
+#         print("📂 기존 인덱스를 로드했습니다.")
+#     except Exception as e:
+#         print(f"⚠️ 기존 인덱스를 불러올 수 없습니다. 새로 생성합니다: {e}")
+#         return create_multimodal_index(kb_name, api_key)
+
+#     docs_to_add = SimpleDirectoryReader(
+#         input_files=new_or_modified
+#     ).load_data()
+
+#     for doc in docs_to_add:
+#         index.insert(doc)
+
+#     index.storage_context.persist(persist_dir=persist_path)
+#     for f in new_or_modified:
+#         prev_meta[f] = os.path.getmtime(f)
+#     _save_metadata(kb_path, prev_meta)
+#     print(f"✅ '{kb_name}' 멀티모달 인덱스가 성공적으로 업데이트되었습니다.")
 
 
 #기존 stream 반환 로직 문제를 chuck로 해결함 뭐가 뭔지.... 추가적인 이해 설명 필수
