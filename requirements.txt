@@ -40,7 +40,7 @@ protobuf
 pillow
 streamlit-lottie
 nest_asyncio
-weasyprint markdown2
+# weasyprint markdown2
 # # LlamaIndex Core & Integrations
 # llama-index-core
 # llama-index-readers-file  # For ImageReader, PDFReader
