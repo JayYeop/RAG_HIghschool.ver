@@ -1,49 +1,31 @@
+# --- Core Application ---
 streamlit
+streamlit-lottie
+python-dotenv
+
+# --- LangChain Core & Integrations ---
 langchain
-langchain-nvidia-ai-endpoints
-langchain-google-genai
+langchain-core
 langchain-community
-faiss-cpu
-python-dotenv
-pypdf
-Pillow
-huggingface_hub[hf_xet]
-nest_asyncio
-# -- RAG with Vision --
-llama-index # 핵심 프레임워크
-llama-index-llms-google-genai # Google Gemini (멀티모달 모델)를 사용하기 위한 확장
-llama-index-vector-stores-faiss # 우리가 이미 사용 중인 FAISS 벡터 저장소를 LlamaIndex에서 사용하기 위한 확장
-llama-index-readers-file # 다양한 파일(PDF 등)을 읽기 위한 확장
-
-# --- 시연을 위해 추가된 패키지 ---
-# OCR 기능(Gemini 사용으로 불필요)
-pytesseract
-opencv-python
-
-# 다양한 문서 처리
-unstructured
-python-docx
-python-pptx
-
-# UI/UX 향상 (선택 사항)
-streamlit-lottie
-streamlit
-python-dotenv
 langchain-nvidia-ai-endpoints
 langchain-google-genai
-langchain
+
+# --- Vector Store ---
+# For CPU-based FAISS. If you use GPU, change to faiss-gpu
 faiss-cpu
+
+# --- Document Loaders & Processing ---
 pypdf
+# For .docx and .pptx file support
 unstructured[docx,pptx]
-lancedb
-protobuf
+
+# --- PDF Generation for Study Notes ---
+fpdf2
+markdown2
+requests
+
+# --- Utilities ---
+# For image processing (base64 encoding)
 pillow
-streamlit-lottie
+# For running async code in some environments
 nest_asyncio
-# weasyprint markdown2
-# # LlamaIndex Core & Integrations
-# llama-index-core
-# llama-index-readers-file  # For ImageReader, PDFReader
-# llama-index-llms-google-genai
-# llama-index-embeddings-google-genai
-# llama-index-vector-stores-faiss
