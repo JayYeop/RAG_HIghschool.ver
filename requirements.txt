@@ -2,7 +2,6 @@
 streamlit
 streamlit-lottie
 python-dotenv
-streamlit-extras
 # --- LangChain Core & Integrations ---
 langchain
 langchain-core
