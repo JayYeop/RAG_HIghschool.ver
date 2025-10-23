@@ -1,0 +1,2 @@
+Q1. 이 닫힌 회로에서 전류가 흐르는 건가요? 전류의 값은 어떻게 되나요? example 2
+Q2. 그러면 왜 V는 Voltage, R은 Resistance인데 왜 전류는 I = current 라는 약어를 쓰고 있는건가요?

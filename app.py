@@ -1,5 +1,7 @@
 # app.py (상태 초기화 버그 최종 수정본)
-
+from streamlit_extras.keyboard_url import keyboard_to_url
+import pyperclip
+from streamlit_extras.mention import mention
 from PIL import Image
 import nest_asyncio
 nest_asyncio.apply()
@@ -19,7 +21,45 @@ from config import DOCS_DIR, KNOWLEDGE_BASE_DIR, SYSTEM_PROMPTS,LANG_TEXT,CONTEX
 st.set_page_config(layout="wide", page_icon="assets/Project_logo.png")
 load_dotenv()
 os.makedirs(KNOWLEDGE_BASE_DIR, exist_ok=True)
+# --- ▼▼▼ '질문 아이디어 보드' 기능 함수 ▼▼▼ ---
 
+def display_pre_questions():
+    """
+    pre_questions.md 파일에서 추천 질문을 읽어와
+    클릭 시 클립보드에 복사되는 버튼들을 생성합니다.
+    """
+    
+    try:
+        with open("pre_questions.md", "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # 정규표현식을 사용하여 ### 제목과 그 아래 내용을 쌍으로 추출
+        # re.DOTALL 플래그는 '.'이 줄바꿈 문자도 포함하도록 만듭니다.
+        questions = re.findall(r"### (.*?)\n(.*?)(?=\n###|\Z)", content, re.DOTALL)
+    
+    
+        with st.expander("💡 질문 아이디어"):
+            st.info("아래 버튼을 클릭하면 질문이 클립보드에 복사됩니다.")
+
+            if not questions:
+                st.warning("추천 질문 파일을 찾을 수 없거나, 내용이 비어있습니다.")
+                return
+
+            cols = st.columns(2)
+            for i, (label, question) in enumerate(questions):
+                label = label.strip()
+                question = question.strip()
+                
+                with cols[i % 2]:
+                    # 각 질문에 대해 고유한 key를 생성해주는 것이 중요합니다.
+                    if st.button(label, key=f"preq_{i}", use_container_width=True):
+                        pyperclip.copy(question)
+                        # 사용자에게 복사되었다는 피드백을 줍니다.
+                        st.toast(f"'{label}' 질문이 복사되었습니다!", icon="📋")
+                        
+    except FileNotFoundError:
+        # 파일이 없을 경우 경고 메시지만 표시하고 넘어갑니다.
+        st.warning("'pre_questions.md' 파일을 찾을 수 없습니다.")
 
 
 # --- 세션 상태 초기화 ---
@@ -36,6 +76,7 @@ if "user_api_key" not in st.session_state: st.session_state.user_api_key = ""
 lang = LANG_TEXT[st.session_state.language]
 create_new_kb_option = lang['create_new_kb_option']
 system_prompt = SYSTEM_PROMPTS[st.session_state.language]
+# print(system_prompt)
 if "api_key_source" not in st.session_state:
     st.session_state.api_key_source = lang['api_key_source_local']
 valid_api_sources = [lang['api_key_source_local'], lang['api_key_source_user']]
@@ -43,6 +84,12 @@ if st.session_state.api_key_source not in valid_api_sources:
     st.session_state.api_key_source = lang['api_key_source_local']
 
 # --- 헬퍼 및 콜백 함수 ---
+def clear_chat_and_retriever():
+    """대화 기록을 모두 초기화합니다."""
+    st.session_state.messages = []
+    # st.session_state.retriever = None # 리트리버도 리셋하여 KB를 다시 로드하게 만듭니다.
+    # st.session_state.multimodal_engine = None # 멀티모달을 썼다면 이것도 리셋 필요
+    st.success("대화 기록이 초기화되었습니다, 새 대화를 시작하세요!")
 def get_knowledge_bases(include_create_new=True):
     # '방(폴더)' 목록을 가져옵니다.
     db_list = [d for d in os.listdir(KNOWLEDGE_BASE_DIR) if os.path.isdir(os.path.join(KNOWLEDGE_BASE_DIR, d))]
@@ -94,6 +141,7 @@ def load_lottiefile(filepath: str):
         return None # 파일이 없으면 None을 반환
 
 # ================================== 1. 홀 (사이드바) ==================================
+
 with st.sidebar:
     # (로고, 언어, AI 제공사, API 키 UI 부분은 동일)
     try:
@@ -175,8 +223,13 @@ with st.sidebar:
     #     st.rerun() # 앱을 재실행하여 올바른 엔진을 로드하도록 함
     # # ✨ --- 수정된 부분 끝 --- ✨
     
+
+
     # 채팅 저장/불러오기 UI
     st.subheader(lang['chat_history_header'])
+
+    
+    
     now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     file_name = f"chat_history_{now}.json"
     
@@ -192,6 +245,12 @@ with st.sidebar:
         mime="application/json",
         key="download_btn" # ✨ 안정성을 위해 key 추가
     )
+    st.button(
+    lang['chat_history_delete_button'],
+    type="secondary",  # 버튼 스타일을 강조하지 않도록 설정
+    on_click=clear_chat_and_retriever, # 클릭 시 정의된 함수 실행
+    help=lang['chat_history_delete_button'])
+
     # ✨ 2. 파일 업로더에 key와 on_change 콜백을 연결합니다.
     st.file_uploader(
         label=lang['chat_history_load_label'], 
@@ -199,6 +258,7 @@ with st.sidebar:
         key='chat_file_uploader', # 위젯의 상태를 참조하기 위한 key
         on_change=process_chat_load # 파일이 업로드되면 이 함수를 실행
     )
+
 # ================================== 2. 주방 (메인 로직) ==================================
 final_api_key = None
 if st.session_state.api_key_source == lang['api_key_source_local']:
@@ -302,17 +362,26 @@ if api_key_ok and st.session_state.selected_kb != create_new_kb_option:
         st.session_state.multimodal_engine = None # 반대쪽 엔진은 비활성화
 
 final_page_title = lang['page_title']
-# --- 학습 노트 생성 기능 ---
+
+
 # 대화가 어느정도 진행된 후에만 버튼이 보이도록 함
+# 첫 아이디어 패널
+if st.session_state.language == 'Korean':
+
+    display_pre_questions() # 메세지가 < 1 이하 일때, 패널을 보여주는 함수
+
+# --- 학습 노트 생성 기능 ---
 if len(st.session_state.messages) > 3:
+    # print(len(st.session_state.messages),'######Count######') #Learning Note Count Debugging
     st.divider()
-    if st.button("📝 현재까지 대화 내용으로 학습 노트 만들기"):
+    if st.button("📋 현재까지 대화 내용으로 학습 노트 만들기"):
         
-        st.subheader("✨ AI 생성 학습 노트 ✨")
+        
+        st.subheader("📝 AI 생성 학습 노트 📝")
         
         with st.spinner("AI가 대화 내용을 분석하여 학습 노트를 만들고 있습니다..."):
             # 스트리밍으로 화면에 표시하고, 전체 내용은 변수에 저장
-            full_markdown = st.write_stream(rag_core.stream_study_guide(llm, st.session_state.messages))
+            full_markdown = st.write_stream(rag_core.stream_study_guide_optimized(llm, st.session_state.messages))
 
         with st.spinner("PDF 파일 변환 중..."):
             # Markdown을 PDF 바이트로 변환

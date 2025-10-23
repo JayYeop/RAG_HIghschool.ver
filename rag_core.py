@@ -24,9 +24,10 @@ from langchain_core.messages import HumanMessage,AIMessageChunk
 from langchain_nvidia_ai_endpoints import ChatNVIDIA, NVIDIAEmbeddings
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings 
 from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import (PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader)
-from langchain_community.vectorstores.faiss import FAISS
+from langchain_community.document_loaders import (PyPDFLoader, TextLoader, UnstructuredWordDocumentLoader, UnstructuredPowerPointLoader,UnstructuredPDFLoader)
+from langchain_community.vectorstores.faiss import FAISS #FAISS
 from langchain.storage import InMemoryStore
+
 from langchain.retrievers import ParentDocumentRetriever
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
@@ -42,6 +43,7 @@ from config import (
 )
 
 load_dotenv()
+
 
 def load_and_process_documents(llm: ChatGoogleGenerativeAI, directory: str):
     """
@@ -71,7 +73,8 @@ def load_and_process_documents(llm: ChatGoogleGenerativeAI, directory: str):
         # --- 기존 텍스트 파일 처리 ---
         loader = None
         if file_ext == '.pdf':
-            loader = PyPDFLoader(file_path)
+            
+            loader = UnstructuredPDFLoader(file_path, mode="elements",languages=['kor','eng'])
         elif file_ext == '.docx':
             loader = UnstructuredWordDocumentLoader(file_path)
         elif file_ext == '.pptx':
@@ -164,9 +167,19 @@ def create_and_save_retriever(llm,embedder, kb_name):
     raw_documents = load_and_process_documents(llm,DOCS_DIR)
     if not raw_documents:
         return None
-
+    # raw_documents 리스트에서 page_content가 비어있지 않은(non-empty)
+    # Document 객체들만 남기고 리스트를 새로 만듭니다.
+    print(f"필터링 전 문서 개수: {len(raw_documents)}")
+    filtered_documents = [doc for doc in raw_documents if doc.page_content.strip()]
+    print(f"필터링 후 문서 개수: {len(filtered_documents)}")
+    
+    # 만약 모든 문서가 필터링되어 아무것도 남지 않았다면, 종료합니다.
+    if not filtered_documents:
+        print("⚠️ 내용이 있는 유효한 문서가 없습니다.")
+        return None
+    
     parent_splitter, child_splitter = get_splitters()
-    vectorstore = FAISS.from_documents(raw_documents, embedder)
+    vectorstore = FAISS.from_documents(filtered_documents, embedder)
     store = InMemoryStore()
 
     retriever = ParentDocumentRetriever(
@@ -174,9 +187,11 @@ def create_and_save_retriever(llm,embedder, kb_name):
         docstore=store,
         child_splitter=child_splitter,
         parent_splitter=parent_splitter,
+        # search_kwargs={'k': 3} # 최종적으로 반환할 부모 문서의 개수를 3개로 지정
     )
-
-    retriever.add_documents(raw_documents, ids=None)
+    # retriever.vectorstore.search_type = "mmr"
+    # retriever.vectorstore.search_kwargs.update({'fetch_k': 10}) # MMR 계산을 위해 먼저 가져올 자식 문서 개수
+    retriever.add_documents(filtered_documents, ids=None)
 
     kb_path = os.path.join(KNOWLEDGE_BASE_DIR, kb_name)
     os.makedirs(kb_path, exist_ok=True)
@@ -570,28 +585,119 @@ def describe_image_with_vision(llm: ChatGoogleGenerativeAI, image_path: str) -> 
 # rag_core.py 파일 맨 아래에 아래 함수를 추가하세요.
 import json
 
-def stream_study_guide(llm, chat_history: list):
-    """
-    [이미지 제외 버전] 텍스트 채팅 기록만을 분석하여 Markdown 형식의 학습 노트를 스트리밍으로 생성합니다.
-    """
-    print("🧠 (텍스트 전용) 학습 노트 스트리밍 생성을 시작합니다...")
+# def stream_study_guide(llm, chat_history: list):
+#     """
+#     [이미지 제외 버전] 텍스트 채팅 기록만을 분석하여 Markdown 형식의 학습 노트를 스트리밍으로 생성합니다.
+#     """
+#     print("🧠 (텍스트 전용) 학습 노트 스트리밍 생성을 시작합니다...")
 
-    # 1. [수정] 이미지 정보를 제외하고 순수 텍스트 대화 기록만으로 재구성
+#     # 1. [수정] 이미지 정보를 제외하고 순수 텍스트 대화 기록만으로 재구성
+#     history_for_prompt = []
+#     for msg in chat_history:
+#         role = "학생" if msg["role"] == "user" else "AI 튜터"
+#         content = msg["content"]
+        
+#         # 이미지와 관련된 메시지는 건너뛰거나 내용에서 이미지 관련 언급을 제거할 수 있습니다.
+#         # 여기서는 간단하게 텍스트 내용만 포함합니다.
+#         if content: # 내용이 비어있지 않은 경우에만 추가
+#             history_for_prompt.append(f'{role}: {content}')
+    
+#     formatted_history = "\n".join(history_for_prompt)
+
+#     # 2. [수정] 시스템 프롬프트에서 이미지 관련 모든 지시사항 제거
+#     system_prompt = f"""
+# You are an expert tutor creating a study guide. Analyze the provided conversation history between a student and an AI tutor. Your task is to generate a well-structured study guide in Markdown format based on the key topics discussed in the text.
+
+# The final output MUST strictly be in Markdown format and include the following sections:
+
+# 1.  **# 학습 노트: [대화의 핵심 주제]**
+#     - 대화의 전체 주제를 요약하여 제목을 작성해주세요.
+
+# 2.  **## 📝 핵심 개념 요약**
+#     - 대화에서 다루어진 가장 중요한 개념, 공식, 원리 등을 3~5개의 글머리 기호(bullet points)로 요약해주세요.
+
+# 3.  **## ✍️ 복습 퀴즈 (3문제)**
+#     - 대화의 핵심 내용을 바탕으로, 학생이 자신의 이해도를 점검할 수 있는 객관식 또는 단답형 문제 3개를 만들어주세요.
+#     형식:
+#         **[문제 1]** (질문 내용)
+#         **[문제 2]** (질문 내용)
+#         **[문제 3]** (질문 내용)...
+#         ...
+#         ----------------------
+#         **[문제 1]**
+#         <정답 및 해설>
+#         (답변 내용)
+#         **[문제 2]** 
+#         <정답 및 해설>
+#         (답변 내용)
+
+# Please generate the entire study guide based on the conversation below.
+
+# ---
+# [대화 기록]
+# {formatted_history}
+# ---
+# """
+    
+#     try:
+#         # invoke 대신 stream을 사용합니다.
+#         stream = llm.stream(system_prompt)
+#         for chunk in stream:
+#             yield chunk.content # content 부분만 yield
+#         print("✅ 학습 노트 스트리밍 생성이 완료되었습니다.")
+
+#     except Exception as e:
+#         print(f"❌ 학습 노트 생성 중 오류 발생: {e}")
+#         yield f"학습 노트를 생성하는 중 오류가 발생했습니다: {e}"
+
+def stream_study_guide_optimized(llm, chat_history: list):
+    """
+    [최적화 버전] 2단계 요약 전략을 사용하여 학습 노트를 매우 빠르게 생성합니다.
+    1. 대화 기록의 핵심 내용을 먼저 요약합니다.
+    2. 요약된 내용을 기반으로 최종 학습 노트를 생성합니다.
+    """
+    print("🧠 (최적화 버전) 학습 노트 생성을 시작합니다...")
+
+    # --- 1단계: 대화 기록의 핵심 내용 요약 ---
+    # 대화 기록을 프롬프트용으로 포맷팅하는 것은 동일합니다.
     history_for_prompt = []
     for msg in chat_history:
         role = "학생" if msg["role"] == "user" else "AI 튜터"
         content = msg["content"]
-        
-        # 이미지와 관련된 메시지는 건너뛰거나 내용에서 이미지 관련 언급을 제거할 수 있습니다.
-        # 여기서는 간단하게 텍스트 내용만 포함합니다.
-        if content: # 내용이 비어있지 않은 경우에만 추가
+        if content:
             history_for_prompt.append(f'{role}: {content}')
-    
     formatted_history = "\n".join(history_for_prompt)
 
-    # 2. [수정] 시스템 프롬프트에서 이미지 관련 모든 지시사항 제거
-    system_prompt = f"""
-You are an expert tutor creating a study guide. Analyze the provided conversation history between a student and an AI tutor. Your task is to generate a well-structured study guide in Markdown format based on the key topics discussed in the text.
+    # 요약을 위한 간결한 프롬프트
+    summarization_prompt = f"""
+Analyze the following conversation history between a student and an AI tutor.
+Identify and list the main topics, key concepts, and important questions discussed.
+Respond ONLY with a concise summary in bullet points.
+
+---
+[Conversation History]
+{formatted_history}
+---
+"""
+    try:
+        print("➡️ 1단계: 대화 내용 요약을 요청합니다...")
+        # 여기서는 스트리밍이 아닌, invoke를 사용해 요약본 전체를 한 번에 받습니다.
+        summary_response = llm.invoke(summarization_prompt)
+        conversation_summary = summary_response.content
+        print(f"✅ 1단계 요약 완료:\n{conversation_summary}")
+
+    except Exception as e:
+        print(f"❌ 1단계 요약 중 오류 발생: {e}")
+        yield f"학습 노트 생성을 위한 대화 요약 중 오류가 발생했습니다: {e}"
+        return
+
+
+    # --- 2단계: 요약본을 기반으로 최종 학습 노트 생성 ---
+    # 기존의 상세한 학습 노트 생성 프롬프트를 사용하되,
+    # 방대한 대화 기록 대신 '핵심 요약본'을 넣어줍니다.
+    study_guide_prompt = f"""
+You are an expert tutor creating a study guide.
+Your task is to generate a well-structured study guide in Markdown format based on the provided 'Conversation Summary'.
 
 The final output MUST strictly be in Markdown format and include the following sections:
 
@@ -602,99 +708,274 @@ The final output MUST strictly be in Markdown format and include the following s
     - 대화에서 다루어진 가장 중요한 개념, 공식, 원리 등을 3~5개의 글머리 기호(bullet points)로 요약해주세요.
 
 3.  **## ✍️ 복습 퀴즈 (3문제)**
-    - 대화의 핵심 내용을 바탕으로, 학생이 자신의 이해도를 점검할 수 있는 객관식 또는 단답형 문제 3개를 만들어주세요.
-    형식:
-        **[문제 1]** (질문 내용)
-        **[문제 2]** (질문 내용)
-        **[문제 3]** (질문 내용)...
-        ...
-        ----------------------
-        **[문제 1]**
-        <정답 및 해설>
-        (답변 내용)
-        **[문제 2]** 
-        <정답 및 해설>
-        (답변 내용)
+    - 대화의 핵심 내용을 바탕으로, 학생이 자신의 이해도를 점검할 수 있는 문제 3개를 만들어주세요.
 
-Please generate the entire study guide based on the conversation below.
+    **[퀴즈 형식 규칙]**
+    - 만약 전기회로 문제가 포함된다면, **반드시 한 문제 이상을 텍스트 기반의 ASCII 아트(ASCII Art)를 사용**하여 회로를 시각적으로 표현해야 합니다.
+    **단 생성된 ASCII 아트는 반드시 Markdown 코드 블록(```)으로 감싸야 합니다.**
+    - **ASCII 아트 예시:**
+      ```
+        R1 (4Ω)            R2 (8Ω)
+    +----/\/\/\/\--------+----/\/\/\/\----+
+    |                                     |
+    |                                     |
+    +-[(+) V1: 12V (-)]+----------------|
+                                          |
+                                          |
+                                        (GND)
+      ```
+
+    **[전체 출력 형식]**
+    **[문제 1]**
+    (ASCII 아트 회로도, 필요한 경우 포함하기)
+    (질문 내용)
+
+
+    **[문제 2]**
+    (질문 내용)
+
+
+    **[문제 3]**
+    (질문 내용)
+    ----------------------
+    **[문제 1]** <정답 및 해설>
+    (답변 내용)
+
+
+    **[문제 2]** <정답 및 해설>
+    (답변 내용)
+
+
+    **[문제 3]** <정답 및 해설>
+    (답변 내용)
+
+
+Please generate the entire study guide based on the conversation summary below.
 
 ---
-[대화 기록]
-{formatted_history}
+[Conversation Summary]
+{conversation_summary}
 ---
 """
-    
     try:
-        # invoke 대신 stream을 사용합니다.
-        stream = llm.stream(system_prompt)
+        print("➡️ 2단계: 요약본 기반으로 학습 노트 생성을 요청합니다...")
+        # 이제 훨씬 가벼워진 프롬프트로 스트리밍을 호출합니다.
+        stream = llm.stream(study_guide_prompt)
         for chunk in stream:
-            yield chunk.content # content 부분만 yield
+            yield chunk.content
         print("✅ 학습 노트 스트리밍 생성이 완료되었습니다.")
 
     except Exception as e:
-        print(f"❌ 학습 노트 생성 중 오류 발생: {e}")
+        print(f"❌ 2단계 학습 노트 생성 중 오류 발생: {e}")
         yield f"학습 노트를 생성하는 중 오류가 발생했습니다: {e}"
-
+import re
 from fpdf import FPDF
+
+class PDFWithHeaderFooter(FPDF):
+    def header(self):
+        self.set_font('NotoSansKR', 'B', 12)
+        self.cell(0, 10, 'EE-Assistant AI 학습 노트', 0, 1, 'C')
+        self.ln(10)
+
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('NotoSansKR', '', 8)
+        self.cell(0, 10, f'Page {self.page_no()}', 0, 0, 'C')
+
+# [수정됨] 더 똑똑하고 안정적인 헬퍼 함수
+def write_formatted_line(pdf, line_text, font_family, default_size=11, prefix=""):
+    """
+    한 줄의 텍스트를 파싱하여 '**' 부분을 굵게 처리하고, 접두사(e.g., 글머리 기호)를 추가합니다.
+    이 함수는 multi_cell처럼 작동하여 다음 요소에 영향을 주지 않습니다.
+    """
+    # 1. 현재 커서 위치를 저장합니다.
+    start_x = pdf.get_x()
+    start_y = pdf.get_y()
+
+    # 2. 접두사(글머리 기호)가 있다면 먼저 출력합니다.
+    if prefix:
+        pdf.set_font(font_family, '', size=default_size)
+        pdf.write(h=7, text=prefix)
+
+    # 3. 텍스트의 나머지 부분을 파싱하며 출력합니다.
+    parts = re.split(r'(\*\*.*?\*\*)', line_text)
+    for part in parts:
+        if part.startswith('**') and part.endswith('**'):
+            pdf.set_font(font_family, 'B', size=default_size)
+            pdf.write(h=7, text=part[2:-2])
+        else:
+            pdf.set_font(font_family, '', size=default_size)
+            pdf.write(h=7, text=part)
+
+    # 4. (핵심!) 출력이 끝난 후, 커서를 다음 줄 맨 앞으로 강제 이동시킵니다.
+    #    이렇게 하면 다음 요소가 항상 올바른 위치에서 시작하는 것을 보장합니다.
+    pdf.ln(7)
 
 
 def save_markdown_to_pdf(markdown_content: str) -> bytes:
-    """
-    [fpdf2 최종 버전 - 레이아웃 수정] Markdown 텍스트를 안정적인 PDF로 변환합니다.
-    프로젝트 내부에 포함된 한글 폰트를 사용합니다.
-    """
     print("📄 [fpdf2] Markdown을 PDF로 변환합니다...")
+    print(markdown_content)
 
     font_dir = "fonts"
     regular_font_path = os.path.join(font_dir, "NotoSansKR-Regular.ttf")
     bold_font_path = os.path.join(font_dir, "NotoSansKR-Bold.ttf")
+    monospace_font_path = os.path.join(font_dir, "D2Coding-Ver1.3.2.ttf")
 
-    pdf = FPDF()
-    pdf.add_page()
+    pdf = PDFWithHeaderFooter()
     font_family = "NotoSansKR"
-
+    monospace_family = "D2Coding"
+    
     try:
-        if not os.path.exists(regular_font_path) or not os.path.exists(bold_font_path):
-             raise FileNotFoundError("폰트 파일('NotoSansKR-Regular.ttf' 또는 'NotoSansKR-Bold.ttf')을 'fonts' 폴더에서 찾을 수 없습니다.")
-
         pdf.add_font(font_family, "", regular_font_path, uni=True)
         pdf.add_font(font_family, "B", bold_font_path, uni=True)
-        pdf.set_font(font_family, size=11)
-        
+        if os.path.exists(monospace_font_path):
+            pdf.add_font(monospace_family, "", monospace_font_path, uni=True)
+        else:
+            print(f"⚠️ 경고: 고정폭 폰트 '{monospace_font_path}'를 찾을 수 없습니다. ASCII 아트가 깨질 수 있습니다.")
+            monospace_family = "courier" # FPDF 기본 내장 고정폭 폰트로 대체
     except Exception as e:
-        print(f"⚠️ 경고: 한글 폰트 로드 중 오류 발생: {e}")
-        pdf.set_font("helvetica", size=11)
         font_family = "helvetica"
-
-    # --- ▼▼▼ 핵심 수정 부분 (모든 multi_cell에 ln=1 추가) ▼▼▼ ---
+    
+    pdf.set_font(font_family, size=11)
+    pdf.add_page()
+    # --- ▼▼▼ ASCII 아트 감지를 위한 상태 변수 추가 ▼▼▼ ---
+    is_ascii_art_block = False
+    ascii_art_buffer = []
+    # [수정됨] 메인 루프를 더 단순하고 명확하게 변경
     for line in markdown_content.split('\n'):
+        if line.strip() == "```":
+            if not is_ascii_art_block:
+                is_ascii_art_block = True
+            else: # 코드 블록 끝
+                is_ascii_art_block = False
+                if ascii_art_buffer:
+                    # 버퍼에 쌓인 ASCII 아트를 고정폭 폰트로 한 번에 출력
+                    pdf.set_font(monospace_family, '', size=10) # 폰트 크기를 약간 작게
+                    pdf.set_fill_color(245, 245, 245) # 연한 회색 배경
+                    ascii_text = "\n".join(ascii_art_buffer)
+                    pdf.multi_cell(0, 5, ascii_text, border=1, ln=1, fill=True,align='C')
+                    pdf.set_font(font_family, '', size=11) # 원래 폰트로 복귀
+                    ascii_art_buffer = [] # 버퍼 비우기
+
+            continue # ``` 라인은 출력하지 않음
+
+        if is_ascii_art_block:
+            ascii_art_buffer.append(line)
+            continue
+        # --- ▲▲▲ ASCII 아트 블록 처리 로직 끝 ▲▲▲ ---
+
         line = line.strip()
+        if not line:
+            continue
+        
         if line.startswith('# '):
             pdf.set_font(font_family, 'B', size=24)
-            pdf.multi_cell(0, 12, line.replace('# ', '').strip(), ln=1)
-            pdf.ln(5) # 제목 아래에 추가 간격
-        elif line.startswith('## '):
-            pdf.set_font(font_family, 'B', size=18)
-            pdf.multi_cell(0, 10, line.replace('## ', '').strip(), ln=1)
-            pdf.ln(3)
-        elif line.startswith('### '):
-            pdf.set_font(font_family, 'B', size=14)
-            pdf.multi_cell(0, 10, line.replace('### ', '').strip(), ln=1)
-            pdf.ln(1)
-        elif line.startswith('* ') or line.startswith('- '):
-            pdf.set_font(font_family, '', size=11)
-            pdf.multi_cell(0, 7, f"  • {line[2:].strip()}", ln=1)
-        elif line.startswith('<정답 및 해설>'):
-             pdf.set_font(font_family, 'B', size=11)
-             pdf.multi_cell(0, 7, line, ln=1)
-        elif line == "": # 빈 줄이면 간격을 조금 띄움
-            pdf.ln(3)
-        else:
-            pdf.set_font(font_family, '', size=11)
-            pdf.multi_cell(0, 7, line, ln=1)
+            pdf.set_text_color(40, 40, 120)
+            pdf.multi_cell(0, 15, line.replace('# ', '').strip(), ln=1, align='C') # 높이 조절
+            pdf.set_text_color(0, 0, 0)
+            pdf.ln(10)
 
-    print("✅ [fpdf2] PDF 변환 완료.")
+        elif line.startswith('## '):
+            pdf.set_font(font_family, 'B', size=16)
+            pdf.set_fill_color(224, 235, 255)
+            # multi_cell 대신 cell을 써야 배경색이 텍스트 높이에 맞게 깔끔하게 들어갑니다.
+            pdf.cell(0, 10, line.replace('## ', '').strip(), ln=1, align='C', fill=True)
+            pdf.ln(5)
+        
+        elif line.startswith('----------------------'):
+            pdf.add_page()
+
+        elif line.startswith('* '):
+            # 글머리 기호를 접두사로, 나머지 텍스트를 내용으로 헬퍼 함수에 전달
+            write_formatted_line(pdf, line[2:].strip(), font_family, default_size=11, prefix="  •  ")
+
+        else: # [문제], <정답및해설>, 일반 텍스트 모두 이 곳에서 처리
+            write_formatted_line(pdf, line, font_family)
+
+    print("✅ 'design_preview.pdf' 파일이 멋지게 생성되었습니다!")
     return bytes(pdf.output(dest='S'))
+
+
+
+
+
+
+
+
+
+
+
+
+
+# def save_markdown_to_pdf(markdown_content: str) -> bytes:
+#     """
+#     [fpdf2 최종 버전 - 레이아웃 수정] Markdown 텍스트를 안정적인 PDF로 변환합니다.
+#     프로젝트 내부에 포함된 한글 폰트를 사용합니다.
+#     """
+#     print("📄 [fpdf2] Markdown을 PDF로 변환합니다...")
+
+#     font_dir = "fonts"
+#     regular_font_path = os.path.join(font_dir, "NotoSansKR-Regular.ttf")
+#     bold_font_path = os.path.join(font_dir, "NotoSansKR-Bold.ttf")
+
+#     pdf = FPDF()
+#     pdf.add_page()
+#     font_family = "NotoSansKR"
+
+#     try:
+#         if not os.path.exists(regular_font_path) or not os.path.exists(bold_font_path):
+#              raise FileNotFoundError("폰트 파일('NotoSansKR-Regular.ttf' 또는 'NotoSansKR-Bold.ttf')을 'fonts' 폴더에서 찾을 수 없습니다.")
+
+#         pdf.add_font(font_family, "", regular_font_path, uni=True)
+#         pdf.add_font(font_family, "B", bold_font_path, uni=True)
+#         pdf.set_font(font_family, size=11)
+        
+#     except Exception as e:
+#         print(f"⚠️ 경고: 한글 폰트 로드 중 오류 발생: {e}")
+#         pdf.set_font("helvetica", size=11)
+#         font_family = "helvetica"
+
+#     # --- ▼▼▼ 핵심 수정 부분 (모든 multi_cell에 ln=1 추가) ▼▼▼ ---
+#     for line in markdown_content.split('\n'):
+#         line = line.strip()
+#         if line.startswith('# '):  #Main-Title
+#             pdf.set_font(font_family, 'B', size=24)
+#             pdf.set_text_color(80,91,166)
+#             pdf.multi_cell(0, 12, line.replace('# ', '').strip(), ln=1, align='C')
+#             pdf.ln(5) # 제목 아래에 추가 간격
+#         elif line.startswith('## '):
+#             pdf.set_font(font_family, 'B', size=18)
+#             # --- 디자인 추가 ---
+#             pdf.set_fill_color(230, 230, 230)  # 연한 회색 배경 설정
+#             pdf.set_text_color(0, 0, 0)       # 텍스트 색상은 검은색으로
+#             pdf.set_draw_color(0, 80, 180)    # 선 색상을 파란색 계열로
+#             pdf.set_line_width(0.5)           # 선 두께 설정
+#             # 제목 텍스트를 배경색이 채워진 셀에 쓴다
+#             pdf.cell(0, 10, line.replace('## ', '').strip(), ln=1, fill=True, align='C', border=0) # align='C'로 중앙 정렬
+#             pdf.ln(3)
+#             # --- 디자인 리셋 (중요!) ---
+#             # 다음 텍스트에 영향이 가지 않도록 기본 색상으로 되돌린다.
+#             pdf.set_fill_color(255, 255, 255) 
+#             pdf.set_text_color(0, 0, 0)
+#         elif line.startswith('### '):
+#             pdf.set_font(font_family, 'B', size=14)
+#             pdf.multi_cell(0, 10, line.replace('### ', '').strip(), ln=1)
+#             pdf.ln(1)
+#         elif line.startswith('* ') or line.startswith('- '):
+#             pdf.set_font(font_family, '', size=11)
+#             pdf.multi_cell(0, 7, f"  • {line[2:].strip()}", ln=1)
+#         elif line.startswith('<정답 및 해설>'):
+#              pdf.set_font(font_family, 'B', size=11)
+#              pdf.multi_cell(0, 7, line, ln=1)
+#         elif line == "": # 빈 줄이면 간격을 조금 띄움
+#             pdf.ln(3)
+#         else:
+#             pdf.set_font(font_family, '', size=11)
+#             pdf.multi_cell(0, 7, line, ln=1)
+            
+
+#     print("✅ [fpdf2] PDF 변환 완료.")
+#     return bytes(pdf.output(dest='S'))
 
 
 
