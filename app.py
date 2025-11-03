@@ -1,7 +1,7 @@
 # app.py (상태 초기화 버그 최종 수정본)
-from streamlit_extras.keyboard_url import keyboard_to_url
+# from streamlit_extras.keyboard_url import keyboard_to_url
 import pyperclip
-from streamlit_extras.mention import mention
+# from streamlit_extras.mention import mention
 from PIL import Image
 import nest_asyncio
 nest_asyncio.apply()
