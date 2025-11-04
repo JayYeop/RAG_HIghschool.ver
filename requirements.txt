@@ -1,5 +1,6 @@
 # --- Core Application ---
 streamlit
+streamlit_extras
 streamlit-lottie
 python-dotenv
 # --- LangChain Core & Integrations ---
